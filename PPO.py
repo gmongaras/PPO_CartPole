@@ -64,19 +64,19 @@ class Actor(nn.Module):
 
 class Critic(nn.Module):
     # Inputs:
-    #   numActions - The number of actions that can be taken
-    def __init__(self, numActions):
+    #   stateShape - The shape of a state which the actor takes as input
+    def __init__(self, stateShape):
         super(Critic, self).__init__()
         
         
-        self.numActions = numActions
+        self.stateShape = stateShape
 
 
         # Critic network:
         # Input shape: The number of possible actions
         # Output shape: 1 representing how good a state is
         self.critic = nn.Sequential(
-            nn.Linear(numActions, 256),
+            nn.Linear(np.array(stateShape)[0], 256),
             nn.ReLU(),
 
             nn.Linear(256, 256),
@@ -95,6 +95,9 @@ class Critic(nn.Module):
 
     # Feed forward
     def forward(self, state):
+        if type(state) is np.ndarray:
+            state = torch.from_numpy(state)
+        
         # Return the critic value of the state
         return self.critic(state)
 
@@ -183,7 +186,7 @@ class Player:
         #self.actors = [Actor(stateShape=stateShape, numActions=numActions) for i in range(0, numActors)]
         self.actor = Actor(stateShape=stateShape, numActions=numActions)
         self.oldActor = copy.deepcopy(self.actor)
-        self.critic = Critic(numActions=numActions)
+        self.critic = Critic(stateShape=stateShape)
     
 
     # Store memory using the given state
@@ -234,19 +237,25 @@ class Player:
             # Get an action sample from the actor distribution
             actions = self.actor(observation)
             bestAction = torch.argmax(actions)
+            #actions_cat = Categorical(actions)
+            #bestAction = actions_cat.sample()
             
             # Get the data from the new environment
-            observation, reward, done, info = env.step(bestAction.numpy())
+            observation, reward, done, info = env.step(bestAction.item())
             
             # Calculate the critic value for the new state
-            currCriticVal = self.critic(actions)
+            currCriticVal = self.critic(observation)
             
             # Calculate r_t, the ratio of the old policy action
             # and the current policy action
             oldActions = self.oldActor(state=observation)
-            oldActions.detach()
+            #oldActions.detach()
             oldBestAction = torch.argmax(oldActions)
-            r_t = (actions/oldActions).mean()
+            #oldActions_cat = Categorical(oldActions)
+            #oldBestAction = oldActions_cat.sample()
+            r_t = (actions/oldActions)
+            r_t = torch.nan_to_num(r_t, nan=0.0)
+            r_t = r_t.mean()
             
             # Save the new info to memory
             # observation = torch.tensor(observation, dtype=torch.float, requires_grad=True)#, requires_grad=True)
@@ -311,16 +320,22 @@ class Player:
         self.critic.optimizer.param_groups[0]["lr"] = alpha
         
         
+        # Change the needed lists to tensors for operations while retaining
+        # the gradient graph.
+        # NOTE: torch.tensor() does not retain the graph so we use torch.cat
+        # or torch.stack.
+        rewards_Tensor = torch.tensor(rewards[0:advantages.shape[0]], dtype=torch.float, requires_grad=True, device=device)
+        r_ts_Tensor = torch.stack(r_ts[0:advantages.shape[0]])
+        currCriticVals_Tensor = torch.cat(currCriticVals[0:advantages.shape[0]])
+        
+        
         # Update the loss numEpochs times
-        r_ts = torch.tensor(r_ts[0:advantages.shape[0]], dtype=torch.float, requires_grad=True, device=device)
-        rewards = torch.tensor(rewards[0:advantages.shape[0]], dtype=torch.float, requires_grad=True, device=device)
-        currCriticVals = torch.tensor(currCriticVals[0:advantages.shape[0]], dtype=torch.float, requires_grad=True, device=device)
         for epoch in range(0, self.numEpochs):
             # Calculate the actor loss (L_CLIP)
-            L_CLIP = torch.min(r_ts*advantages, torch.clip(r_ts, 1-epsilon, 1+epsilon)*advantages).mean()
+            L_CLIP = torch.min(r_ts_Tensor*advantages, torch.clip(r_ts_Tensor, 1-epsilon, 1+epsilon)*advantages).mean()
             
             # Calculate the critic loss (L_VF)
-            L_VF = torch.pow(rewards-currCriticVals, 2).mean()
+            L_VF = torch.pow(rewards_Tensor-currCriticVals_Tensor, 2).mean()
             
             # Get the entropy bonus from a normal distribution
             S = torch.tensor(np.random.normal(), dtype=torch.float, requires_grad=False)
@@ -333,30 +348,14 @@ class Player:
             self.critic.optimizer.zero_grad()
             
             
-            list(self.actor.actor.parameters())[0].retain_grad()
-            list(self.critic.critic.parameters())[0].retain_grad()
-            list(self.critic.critic.parameters())[7].retain_grad()
-            L_VF.retain_grad()
-            currCriticVals.retain_grad()
-            L_CLIP.retain_grad()
-            advantages.retain_grad()
-            r_ts.retain_grad()
-            rewards.retain_grad()
-            
-            
-            
             # Backpropogate the total loss to get the gradients
             L_Final.backward()
-            a = torch.sum(currCriticVals)
-            a.backward()
             
             # Step the optimizers and update the models
-            print(list(self.critic.critic.parameters())[0].grad)
-            print(list(self.critic.critic.parameters())[0])
             self.actor.optimizer.step()
             self.critic.optimizer.step()
         
-        print("Reward:", torch.sum(rewards), "Total Loss:", L_Final.item(), "Actor Loss:", torch.mean(L_CLIP).item(), "Critic Loss:", torch.mean(L_VF).item())
+        print("Reward:", torch.sum(rewards_Tensor).item(), "Total Loss:", L_Final.item(), "Actor Loss:", torch.mean(L_CLIP).item(), "Critic Loss:", torch.mean(L_VF).item())
         
         # Clear the memory
         self.memory.clearMemory()
