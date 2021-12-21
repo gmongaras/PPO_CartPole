@@ -30,6 +30,7 @@ class Actor(nn.Module):
         # Actor network:
         # Input shape: The shape of the state
         # Output shape: The number of actions
+        # Note: The output is in log form
         self.actor = nn.Sequential(
             nn.Linear(np.array(stateShape)[0], 256),
             nn.ReLU(),
@@ -41,7 +42,7 @@ class Actor(nn.Module):
             nn.ReLU(),
 
             nn.Linear(256, numActions),
-            nn.Softmax()
+            nn.LogSoftmax(dim=-1)
         ).to(device)
         
         
@@ -78,7 +79,7 @@ class Critic(nn.Module):
         self.critic = nn.Sequential(
             nn.Linear(np.array(stateShape)[0], 256),
             nn.ReLU(),
-
+            
             nn.Linear(256, 256),
             nn.ReLU(),
             
@@ -109,27 +110,27 @@ class Memory:
     def __init__(self):
         self.states = []
         self.rewards = []
-        self.currBestActions = []
-        self.oldBestActions = []
+        self.actorProbs = []
+        self.oldActorProbs = []
         self.currCriticVals = []
         self.prevCriticVals = []
         self.r_ts = []
-        self.deltas = []
+        self.dones = []
 
         self.memCount = 0
     
 
     # Store some new memory
-    def addMemory(self, state, reward, currBestAction, oldBestAction,
-                    currCriticVal, prevCriticVal, r_t, delta):
+    def addMemory(self, state, reward, actorProbs, oldActorProbs,
+                    currCriticVal, prevCriticVal, r_t, done):
         self.states.append(state)
         self.rewards.append(reward)
-        self.currBestActions.append(currBestAction)
-        self.oldBestActions.append(oldBestAction)
+        self.actorProbs.append(actorProbs)
+        self.oldActorProbs.append(oldActorProbs)
         self.currCriticVals.append(currCriticVal)
         self.prevCriticVals.append(prevCriticVal)
         self.r_ts.append(r_t)
-        self.deltas.append(delta)
+        self.dones.append(done)
 
         self.memCount += 1
 
@@ -138,12 +139,12 @@ class Memory:
     def clearMemory(self):
         self.states = []
         self.rewards = []
-        self.currBestActions = []
-        self.oldBestActions = []
+        self.actorProbs = []
+        self.oldActorProbs = []
         self.currCriticVals = []
         self.prevCriticVals = []
         self.r_ts = []
-        self.deltas = []
+        self.dones = []
 
         self.memCount = 0
     
@@ -153,8 +154,8 @@ class Memory:
     
     # Get the data from the memory
     def getMemory(self):
-        return self.states, self.rewards, self.currBestActions, self.oldBestActions,\
-               self.currCriticVals, self.prevCriticVals, self.r_ts, self.deltas
+        return self.states, self.rewards, self.actorProbs, self.oldActorProbs,\
+               self.currCriticVals, self.prevCriticVals, self.r_ts, self.dones
 
 
 
@@ -183,28 +184,24 @@ class Player:
         self.memory = Memory()
 
         # Create the actors and critic
-        #self.actors = [Actor(stateShape=stateShape, numActions=numActions) for i in range(0, numActors)]
         self.actor = Actor(stateShape=stateShape, numActions=numActions)
-        self.oldActor = copy.deepcopy(self.actor)
+        self.oldActor = None
         self.critic = Critic(stateShape=stateShape)
     
 
     # Store memory using the given state
     #   state - The state to store memory on
     #   reward - The reward received at the current state
-    #   currBestAction - The action taken to get to this state
-    #   oldBestAction - The action the old policy would take given the actions
-    #                   taken to get to this state.
+    #   actorProbs - The probabilities the actor returned for the given state
+    #   oldActorProbs - The probabilities the old actor returned for the given state
     #   currCriticVal - The critic value of the current state
     #   prevCriticVal - The critic value of the previous state
     #   r_t - The ratio of the current action to the previous action
-    def storeMemory(self, state, reward, currBestAction, oldBestAction,
-                    currCriticVal, prevCriticVal, r_t):
-        # Calculate the delta value
-        delta = reward + self.gamma*currCriticVal - prevCriticVal
-        
+    #   done - If the player is done playing the game
+    def storeMemory(self, state, reward, actorProbs, oldActorProbs,
+                    currCriticVal, prevCriticVal, r_t, done):
         # Store the information in memory
-        self.memory.addMemory(state, reward, currBestAction, oldBestAction, currCriticVal, prevCriticVal, r_t, delta)
+        self.memory.addMemory(state, reward, actorProbs, oldActorProbs, currCriticVal, prevCriticVal, r_t, done)
         
         
         
@@ -235,10 +232,10 @@ class Player:
             env.render()
             
             # Get an action sample from the actor distribution
+            # Note: The actions are in log form
             actions = self.actor(observation)
             bestAction = torch.argmax(actions)
-            #actions_cat = Categorical(actions)
-            #bestAction = actions_cat.sample()
+            bestAction.requires_grad = False
             
             # Get the data from the new environment
             observation, reward, done, info = env.step(bestAction.item())
@@ -248,24 +245,25 @@ class Player:
             
             # Calculate r_t, the ratio of the old policy action
             # and the current policy action
-            oldActions = self.oldActor(state=observation)
-            #oldActions.detach()
-            oldBestAction = torch.argmax(oldActions)
-            #oldActions_cat = Categorical(oldActions)
-            #oldBestAction = oldActions_cat.sample()
-            r_t = (actions/oldActions)
-            r_t = torch.nan_to_num(r_t, nan=0.0)
+            if (self.oldActor == None):
+                oldActions = None
+                oldBestAction = None
+                r_t = actions
+            else:
+                oldActions = self.oldActor(state=observation)
+                oldActions.detach()
+                oldBestAction = torch.argmax(oldActions)
+                
+                # Calculate ratio using log division. Same as (actions/oldActions)
+                # Note that the output is in log form so we just subtract the
+                # two values and exponentiate them
+                r_t = torch.exp(actions-oldActions)
             r_t = r_t.mean()
+            if (r_t == 0):
+                print()
             
             # Save the new info to memory
-            # observation = torch.tensor(observation, dtype=torch.float, requires_grad=True)#, requires_grad=True)
-            # reward = torch.tensor(reward, dtype=torch.float, requires_grad=True)#, requires_grad=True)
-            # bestAction = torch.tensor(bestAction, dtype=torch.float, requires_grad=True)
-            # oldBestAction = torch.tensor(oldBestAction, dtype=torch.float, requires_grad=True,)#, requires_grad=False)
-            # currCriticVal = torch.tensor(currCriticVal, dtype=torch.float, requires_grad=True)
-            # prevCriticVal = torch.tensor(prevCriticVal, dtype=torch.float, requires_grad=True)#, requires_grad=False)
-            # r_t = torch.tensor(r_t, dtype=torch.float, requires_grad=True)
-            self.storeMemory(observation, reward=reward, currBestAction=bestAction, oldBestAction=oldBestAction, currCriticVal=currCriticVal, prevCriticVal=prevCriticVal, r_t=r_t)
+            self.storeMemory(observation, reward=reward, actorProbs=actions, oldActorProbs=oldActions, currCriticVal=currCriticVal, prevCriticVal=prevCriticVal, r_t=r_t, done=done)
             
             # Update the previous critic value to the current values
             prevCriticVal = currCriticVal
@@ -292,32 +290,32 @@ class Player:
         
         
         # The delta value at each timestep used to calculate the advantage
-        deltas = torch.zeros(self.memory.getMemorySize()-1, dtype=torch.float, requires_grad=True)
+        deltas = torch.zeros(0, dtype=torch.float, requires_grad=True)
         
         # The advantages for each timestep
-        advantages = torch.zeros(self.memory.getMemorySize()-1, dtype=torch.float, requires_grad=True)
+        advantages = torch.zeros(0, dtype=torch.float, requires_grad=True)
 
         # Get the data from the memory
-        states, rewards, currBestActions, oldBestActions, currCriticVals, prevCriticVals, r_ts, _ = self.memory.getMemory()
+        states, rewards, actorProbs, oldActorProbs, currCriticVals, prevCriticVals, r_ts, dones = self.memory.getMemory()
 
         # Iterate over all parts of memory and compute the delta values
         for m in range(0, self.memory.getMemorySize()-1):
-            deltas.data[m] = (rewards[m] + self.gamma*currCriticVals[m+1] - currCriticVals[m])
-            #torch.cat((deltas, rewards[m] + self.gamma*currCriticVals[m+1] - currCriticVals[m]))
+            delta = rewards[m] + self.gamma*currCriticVals[m+1] - (1 if dones[m] == False else 0)*currCriticVals[m]
+            deltas = torch.cat([deltas, delta])
 
-        # Iterate over all parts of memory and compute the advantages
+        # Iterate over all parts of memory and compute the advantages using
+        # the delta values
         for m in range(0, self.memory.getMemorySize()-1):
-            advantage = deltas[m]
+            advantage_sums = torch.zeros(0, dtype=torch.float, requires_grad=True)
+            advantage_sums = torch.cat([advantage_sums, deltas[m:m+1]])
             for i in range(m+1, self.memory.getMemorySize()-1):
-                advantage.data += (self.gamma*self.Lambda)*deltas[i]
-            advantages.data[m] = advantage
-            #torch.stack((advantages[m], advantage))
-            #torch.cat((advantages, (self.gamma*self.Lambda)*deltas[m]))
+                advantage_sums = torch.cat([advantage_sums, (self.gamma*self.Lambda)*deltas[i:i+1]*(1 if dones[i] == False else 0)])
+            advantages = torch.cat([advantages, torch.sum(advantage_sums, dim=-1, keepdim=True)])
         
         
         # Update the learning rate in the optimizers
-        self.actor.optimizer.param_groups[0]["lr"] = alpha
-        self.critic.optimizer.param_groups[0]["lr"] = alpha
+        #self.actor.optimizer.param_groups[0]["lr"] = alpha
+        #self.critic.optimizer.param_groups[0]["lr"] = alpha
         
         
         # Change the needed lists to tensors for operations while retaining
@@ -329,33 +327,35 @@ class Player:
         currCriticVals_Tensor = torch.cat(currCriticVals[0:advantages.shape[0]])
         
         
+        # Zero the gradients
+        self.actor.optimizer.zero_grad()
+        self.critic.optimizer.zero_grad()
+        for i in r_ts:
+            i.retain_grad()
+        r_ts_Tensor.retain_grad()
+        advantages.retain_grad()
+        
+        
         # Update the loss numEpochs times
-        for epoch in range(0, self.numEpochs):
+        for epoch in range(0, 1):#self.numEpochs):
             # Calculate the actor loss (L_CLIP)
-            L_CLIP = torch.min(r_ts_Tensor*advantages, torch.clip(r_ts_Tensor, 1-epsilon, 1+epsilon)*advantages).mean()
+            L_CLIP = -torch.min(r_ts_Tensor*advantages, torch.clip(r_ts_Tensor, 1-epsilon, 1+epsilon)*advantages).mean()
             
             # Calculate the critic loss (L_VF)
-            L_VF = torch.pow(rewards_Tensor-currCriticVals_Tensor, 2).mean()
+            L_VF = torch.square(rewards_Tensor-currCriticVals_Tensor).mean()
             
             # Get the entropy bonus from a normal distribution
             S = torch.tensor(np.random.normal(), dtype=torch.float, requires_grad=False)
             
             # Calculate the final loss (L_CLIP_VF_S)
-            L_Final = L_CLIP - self.c1*L_VF + self.c2*S
-            
-            # Zero the gradients
-            self.actor.optimizer.zero_grad()
-            self.critic.optimizer.zero_grad()
+            L_Final = L_CLIP + self.c1*L_VF - self.c2*S
             
             
             # Backpropogate the total loss to get the gradients
             L_Final.backward()
             
-            # Step the optimizers and update the models
-            self.actor.optimizer.step()
-            self.critic.optimizer.step()
+        # Step the optimizers and update the models
+        self.actor.optimizer.step()
+        self.critic.optimizer.step()
         
         print("Reward:", torch.sum(rewards_Tensor).item(), "Total Loss:", L_Final.item(), "Actor Loss:", torch.mean(L_CLIP).item(), "Critic Loss:", torch.mean(L_VF).item())
-        
-        # Clear the memory
-        self.memory.clearMemory()

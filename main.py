@@ -1,6 +1,7 @@
 import gym
 import numpy as np
 from PPO import Player
+import torch
 
 
 
@@ -15,7 +16,6 @@ if __name__ == '__main__':
     numEpochs = 3                # The total number of epochs
     numActors = 8                # (N) The total number of different actors to use
     batchSize = 32//numActors    # The size of each batch to run all actors
-    #minibatchSize = 32*numActors # The size of each minibatch
     gamma = 0.99                 # The discount rate
     Lambda = 0.95                # The GAE parameter
     epsilon_start = 0.1          # The clipping paramter. This value will
@@ -34,6 +34,7 @@ if __name__ == '__main__':
     
     
     # Iterate for numIters times
+    torch.autograd.set_detect_anomaly(True)
     for iteration in range(1, numIters):
         # Iterate over all actors
         for actor in range(1, numActors):
@@ -44,11 +45,6 @@ if __name__ == '__main__':
             alpha = 1-(iteration*actor)/(numIters*numActors)
             stepSize = stepSize_start*alpha
             epsilon = epsilon_start*alpha
-            
-            # # Run all actors in the environment for T timesteps
-            # for t in range(1, T):
-            #     # Render the environment
-            #     env.render()
             
             # Run the models for T timesteps and save the results to memory
             player.runPolicy(env, observation, T)
