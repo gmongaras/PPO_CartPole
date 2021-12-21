@@ -23,7 +23,7 @@ if __name__ == '__main__':
     alpha = 1                    # Starting value of lambda which will update
     c1 = 1                       # The VF coefficient in the Loss
     c2 = 0.01                    # The entropy coefficient in the Loss
-    numIters = 10000             # The number of times to iterate the entire program
+    numIters = 1000              # The number of times to iterate the entire program
     
     
     # Setup the observation space
@@ -38,19 +38,23 @@ if __name__ == '__main__':
     for iteration in range(1, numIters):
         # Iterate over all actors
         for actor in range(1, numActors):
-            # Reset the environment variables
-            observation = env.reset()
+            # Run and Update the model numEpoch times before 
+            # reseting the memory
+            for epoch in range(numEpochs):
+                # Reset the environment variables
+                observation = env.reset()
+                
+                # Update the hyperparameters
+                alpha = 1-(iteration*actor)/(numIters*numActors)
+                stepSize = stepSize_start*alpha
+                epsilon = epsilon_start*alpha
+                
+                # Run the models for T timesteps and save the results to memory
+                player.runPolicy(env, observation, T)
             
-            # Update the hyperparameters
-            alpha = 1-(iteration*actor)/(numIters*numActors)
-            stepSize = stepSize_start*alpha
-            epsilon = epsilon_start*alpha
-            
-            # Run the models for T timesteps and save the results to memory
-            player.runPolicy(env, observation, T)
+                # Compute the gradients for the models to optimize the policy
+                player.computeGrads(alpha=alpha, stepSize=stepSize, epsilon=epsilon)
         
-            # Optimize the models
-            player.updateModels(alpha=alpha, stepSize=stepSize, epsilon=epsilon)
-        
-            # Reset the memory
+            # Reset the memory and update the models
             player.resetMemory()
+            player.updateModels()

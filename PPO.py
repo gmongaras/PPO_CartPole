@@ -187,6 +187,10 @@ class Player:
         self.actor = Actor(stateShape=stateShape, numActions=numActions)
         self.oldActor = None
         self.critic = Critic(stateShape=stateShape)
+        
+        # Zero the gradients
+        self.actor.optimizer.zero_grad()
+        self.critic.optimizer.zero_grad()
     
 
     # Store memory using the given state
@@ -259,8 +263,6 @@ class Player:
                 # two values and exponentiate them
                 r_t = torch.exp(actions-oldActions)
             r_t = r_t.mean()
-            if (r_t == 0):
-                print()
             
             # Save the new info to memory
             self.storeMemory(observation, reward=reward, actorProbs=actions, oldActorProbs=oldActions, currCriticVal=currCriticVal, prevCriticVal=prevCriticVal, r_t=r_t, done=done)
@@ -276,11 +278,11 @@ class Player:
 
 
 
-    # Update the models based on the loss functions
+    # Compute the gradients for the policy based on the loss functions
     #   alpha - The learning rate
     #   stepSize - The stepping size used for the Adam optimizer
     #   epsilon - The epsilon hyperparameter for the clipped loss
-    def updateModels(self, alpha=1, stepSize=0.00025, epsilon=0.1):
+    def computeGrads(self, alpha=1, stepSize=0.00025, epsilon=0.1):
         # Convert the parameters to torch arrays
         epsilon = torch.tensor(epsilon, dtype=torch.float, requires_grad=False, device=device)
         
@@ -327,35 +329,32 @@ class Player:
         currCriticVals_Tensor = torch.cat(currCriticVals[0:advantages.shape[0]])
         
         
-        # Zero the gradients
-        self.actor.optimizer.zero_grad()
-        self.critic.optimizer.zero_grad()
-        for i in r_ts:
-            i.retain_grad()
-        r_ts_Tensor.retain_grad()
-        advantages.retain_grad()
+        # Calculate the actor loss (L_CLIP)
+        L_CLIP = -torch.min(r_ts_Tensor*advantages, torch.clip(r_ts_Tensor, 1-epsilon, 1+epsilon)*advantages).mean()
+        
+        # Calculate the critic loss (L_VF)
+        L_VF = torch.square(rewards_Tensor-currCriticVals_Tensor).mean()
+        
+        # Get the entropy bonus from a normal distribution
+        S = torch.tensor(np.random.normal(), dtype=torch.float, requires_grad=False)
+        
+        # Calculate the final loss (L_CLIP_VF_S)
+        L_Final = L_CLIP - self.c1*L_VF + self.c2*S
         
         
-        # Update the loss numEpochs times
-        for epoch in range(0, 1):#self.numEpochs):
-            # Calculate the actor loss (L_CLIP)
-            L_CLIP = -torch.min(r_ts_Tensor*advantages, torch.clip(r_ts_Tensor, 1-epsilon, 1+epsilon)*advantages).mean()
-            
-            # Calculate the critic loss (L_VF)
-            L_VF = torch.square(rewards_Tensor-currCriticVals_Tensor).mean()
-            
-            # Get the entropy bonus from a normal distribution
-            S = torch.tensor(np.random.normal(), dtype=torch.float, requires_grad=False)
-            
-            # Calculate the final loss (L_CLIP_VF_S)
-            L_Final = L_CLIP + self.c1*L_VF - self.c2*S
-            
-            
-            # Backpropogate the total loss to get the gradients
-            L_Final.backward()
-            
+        # Backpropogate the total loss to get the gradients
+        L_Final.backward(retain_graph=True)
+        
+        # Print the information on the model
+        print("Reward:", torch.sum(rewards_Tensor).item(), "Total Loss:", L_Final.item(), "Actor Loss:", torch.mean(L_CLIP).item(), "Critic Loss:", torch.mean(L_VF).item())
+
+
+
+    def updateModels(self):
         # Step the optimizers and update the models
         self.actor.optimizer.step()
         self.critic.optimizer.step()
         
-        print("Reward:", torch.sum(rewards_Tensor).item(), "Total Loss:", L_Final.item(), "Actor Loss:", torch.mean(L_CLIP).item(), "Critic Loss:", torch.mean(L_VF).item())
+        # Zero the gradients
+        self.actor.optimizer.zero_grad()
+        self.critic.optimizer.zero_grad()
