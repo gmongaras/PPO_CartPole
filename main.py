@@ -20,17 +20,30 @@ if __name__ == '__main__':
     Lambda = 0.95                # The GAE parameter
     epsilon_start = 0.1          # The clipping paramter. This value will
                                  # be updated as alpha updates
-    alpha = 1                    # Starting value of lambda which will update
+    alpha = 0.001                # Starting value of the larning rate which
+                                 # will decrease as the model updates
     c1 = 1                       # The VF coefficient in the Loss
     c2 = 0.01                    # The entropy coefficient in the Loss
     numIters = 1000              # The number of times to iterate the entire program
+    modelDir = ".\\models"       # The location to save the models
+    actorFilename = "actor"      # The name of the file to save the actor to
+    criticFilename = "critic"    # The name of the file to save the critic to
     
     
     # Setup the observation space
     #observation_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32)
     
     # Create a player
-    player = Player(env.observation_space.shape, env.action_space.n, Lambda=Lambda, gamma=gamma, numActors=numActors, T=T, c1=c1, c2=c2)
+    player = Player(env.observation_space.shape, env.action_space.n, Lambda=Lambda, gamma=gamma, numActors=numActors, T=T, c1=c1, c2=c2, alpha=alpha)
+    
+    
+    # The best average reward so far
+    bestAvgReward = 0
+    
+    # player.loadModels(modelDir=modelDir, actorFilename=actorFilename, criticFilename=criticFilename)
+    # while True:
+    #     observation = env.reset()
+    #     player.runPolicy(env, observation, T)
     
     
     # Iterate for numIters times
@@ -38,6 +51,9 @@ if __name__ == '__main__':
     for iteration in range(1, numIters):
         # Iterate over all actors
         for actor in range(1, numActors):
+            # The average reward across epochs
+            avgReward = 0
+            
             # Run and Update the model numEpoch times before 
             # reseting the memory
             for epoch in range(numEpochs):
@@ -53,8 +69,19 @@ if __name__ == '__main__':
                 player.runPolicy(env, observation, T)
             
                 # Compute the gradients for the models to optimize the policy
-                player.computeGrads(alpha=alpha, stepSize=stepSize, epsilon=epsilon)
+                avgReward += player.computeGrads(alpha=alpha, stepSize=stepSize, epsilon=epsilon)
+            
+            
+            avgReward = avgReward/numEpochs
+            print(f"Current average reward: {avgReward}")
         
             # Reset the memory and update the models
             player.resetMemory()
             player.updateModels()
+            
+            # If the current average reward is better than the best average
+            # reward, save the models
+            if avgReward > bestAvgReward:
+                print("Updating Models")
+                player.saveModels(modelDir=modelDir, actorFilename=actorFilename, criticFilename=criticFilename)
+                bestAvgReward = avgReward

@@ -1,12 +1,8 @@
-from math import gamma
 import numpy as np
-from numpy.testing._private.utils import requires_memory
-from tensorflow.python.util.tf_stack import CurrentModuleFilter
 import torch
 import torch.nn as nn
-import torch.optim as optim
-from torch.distributions.categorical import Categorical
 import copy
+import os
 
 
 
@@ -21,7 +17,8 @@ class Actor(nn.Module):
     # Inputs:
     #   stateShape - The shape of a state which the actor takes as input
     #   numActions - The number of actions which the actor uses as output
-    def __init__(self, stateShape, numActions):
+    #   alpha - The learning rate of the model
+    def __init__(self, stateShape, numActions, alpha):
         super(Actor, self).__init__()
         self.stateShape = stateShape
         self.numActions = numActions
@@ -47,7 +44,7 @@ class Actor(nn.Module):
         
         
         # Actor optimizer
-        self.optimizer = torch.optim.Adam(self.parameters())
+        self.optimizer = torch.optim.Adam(self.parameters(), lr=alpha)
     
 
     # Feed forward
@@ -60,13 +57,23 @@ class Actor(nn.Module):
         return self.actor(state)
 
 
+    # Save the model to a file
+    def saveModel(self, filename):
+        torch.save(self.state_dict(), filename)
+    
+    # Load the model from a file
+    def loadModel(self, filename):
+        self.load_state_dict(torch.load(filename))
+
+
 
 
 
 class Critic(nn.Module):
     # Inputs:
     #   stateShape - The shape of a state which the actor takes as input
-    def __init__(self, stateShape):
+    #   alpha - The learning rate of the model
+    def __init__(self, stateShape, alpha):
         super(Critic, self).__init__()
         
         
@@ -91,7 +98,7 @@ class Critic(nn.Module):
         
         
         # Critic optimizer
-        self.optimizer = torch.optim.Adam(self.critic.parameters())
+        self.optimizer = torch.optim.Adam(self.critic.parameters(), lr=alpha)
     
 
     # Feed forward
@@ -101,6 +108,15 @@ class Critic(nn.Module):
         
         # Return the critic value of the state
         return self.critic(state)
+    
+    
+    # Save the model to a file
+    def saveModel(self, filename):
+        torch.save(self.state_dict(), filename)
+    
+    # Load the model from a file
+    def loadModel(self, filename):
+        self.load_state_dict(torch.load(filename))
 
 
 
@@ -170,7 +186,8 @@ class Player:
     #   T - number of timesteps to run the model
     #   c1 - A coefficient for the VF loss term
     #   c2 - A coefficient for the entropy loss term
-    def __init__(self, stateShape, numActions, Lambda=0.95, gamma=0.99, numActors=8, numEpochs=3, T=128, c1=1, c2=0.01):
+    #   alpha - The learning rate of the model
+    def __init__(self, stateShape, numActions, Lambda=0.95, gamma=0.99, numActors=8, numEpochs=3, T=128, c1=1, c2=0.01, alpha=0.001):
         # Store the hyperparameters
         self.Lambda = Lambda
         self.gamma = gamma
@@ -184,9 +201,9 @@ class Player:
         self.memory = Memory()
 
         # Create the actors and critic
-        self.actor = Actor(stateShape=stateShape, numActions=numActions)
+        self.actor = Actor(stateShape=stateShape, numActions=numActions, alpha=alpha)
         self.oldActor = None
-        self.critic = Critic(stateShape=stateShape)
+        self.critic = Critic(stateShape=stateShape, alpha=alpha)
         
         # Zero the gradients
         self.actor.optimizer.zero_grad()
@@ -333,10 +350,11 @@ class Player:
         L_CLIP = -torch.min(r_ts_Tensor*advantages, torch.clip(r_ts_Tensor, 1-epsilon, 1+epsilon)*advantages).mean()
         
         # Calculate the critic loss (L_VF)
-        L_VF = torch.square(rewards_Tensor-currCriticVals_Tensor).mean()
+        L_VF = -torch.square(rewards_Tensor-currCriticVals_Tensor).mean()
         
         # Get the entropy bonus from a normal distribution
         S = torch.tensor(np.random.normal(), dtype=torch.float, requires_grad=False)
+        S = 0
         
         # Calculate the final loss (L_CLIP_VF_S)
         L_Final = L_CLIP - self.c1*L_VF + self.c2*S
@@ -345,11 +363,17 @@ class Player:
         # Backpropogate the total loss to get the gradients
         L_Final.backward(retain_graph=True)
         
+        # Calculate the total reward for this epoch
+        reward = torch.sum(rewards_Tensor).item()
+        
         # Print the information on the model
-        print("Reward:", torch.sum(rewards_Tensor).item(), "Total Loss:", L_Final.item(), "Actor Loss:", torch.mean(L_CLIP).item(), "Critic Loss:", torch.mean(L_VF).item())
+        #print("Reward:", reward, "Total Loss:", L_Final.item(), "Actor Loss:", torch.mean(L_CLIP).item(), "Critic Loss:", torch.mean(L_VF).item())
+
+        # Return the reward
+        return reward
 
 
-
+    # Update the models using the propagated gradients
     def updateModels(self):
         # Step the optimizers and update the models
         self.actor.optimizer.step()
@@ -358,3 +382,14 @@ class Player:
         # Zero the gradients
         self.actor.optimizer.zero_grad()
         self.critic.optimizer.zero_grad()
+        
+        
+    # Save the models to specified filenames
+    def saveModels(self, modelDir, actorFilename, criticFilename):
+        self.actor.saveModel(os.path.join(modelDir, actorFilename))
+        self.critic.saveModel(os.path.join(modelDir, criticFilename))
+        
+    # Load the models from the specified filenames
+    def loadModels(self, modelDir, actorFilename, criticFilename):
+        self.actor.loadModel(os.path.join(modelDir, actorFilename))
+        self.critic.loadModel(os.path.join(modelDir, criticFilename))
