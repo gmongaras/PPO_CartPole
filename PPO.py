@@ -31,9 +31,6 @@ class Actor(nn.Module):
         self.actor = nn.Sequential(
             nn.Linear(np.array(stateShape)[0], 256),
             nn.ReLU(),
-
-            nn.Linear(256, 256),
-            nn.ReLU(),
             
             nn.Linear(256, 256),
             nn.ReLU(),
@@ -85,9 +82,6 @@ class Critic(nn.Module):
         # Output shape: 1 representing how good a state is
         self.critic = nn.Sequential(
             nn.Linear(np.array(stateShape)[0], 256),
-            nn.ReLU(),
-            
-            nn.Linear(256, 256),
             nn.ReLU(),
             
             nn.Linear(256, 256),
@@ -354,7 +348,6 @@ class Player:
         
         # Get the entropy bonus from a normal distribution
         S = torch.tensor(np.random.normal(), dtype=torch.float, requires_grad=False)
-        S = 0
         
         # Calculate the final loss (L_CLIP_VF_S)
         L_Final = L_CLIP - self.c1*L_VF + self.c2*S
@@ -386,6 +379,8 @@ class Player:
         
     # Save the models to specified filenames
     def saveModels(self, modelDir, actorFilename, criticFilename):
+        if not os.path.isdir(modelDir):
+            os.mkdir(modelDir)
         self.actor.saveModel(os.path.join(modelDir, actorFilename))
         self.critic.saveModel(os.path.join(modelDir, criticFilename))
         

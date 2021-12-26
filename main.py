@@ -2,6 +2,8 @@ import gym
 import numpy as np
 from PPO import Player
 import torch
+import matplotlib.pyplot as plt
+import os
 
 
 
@@ -20,14 +22,33 @@ if __name__ == '__main__':
     Lambda = 0.95                # The GAE parameter
     epsilon_start = 0.1          # The clipping paramter. This value will
                                  # be updated as alpha updates
-    alpha = 0.001                # Starting value of the larning rate which
+    alpha = 0.0003               # Starting value of the larning rate which
                                  # will decrease as the model updates
     c1 = 1                       # The VF coefficient in the Loss
     c2 = 0.01                    # The entropy coefficient in the Loss
-    numIters = 1000              # The number of times to iterate the entire program
+    numIters = 200               # The number of times to iterate the entire program
+    
+    
+    
+    
+    
+    # Model saving variables
     modelDir = ".\\models"       # The location to save the models
     actorFilename = "actor"      # The name of the file to save the actor to
     criticFilename = "critic"    # The name of the file to save the critic to
+    loadPreSaved = False         # True to use a pre saved model. False otherwise
+    
+    
+    
+    # Graph saving variables
+    graphDir = ".\\graphs"          # The location to save the graph of the model training
+    graphFilename = "training.png"  # The filename of the graph picture
+    graphX = []                     # Array to hold the X axis data of the graph
+                                    # which is number of iterations
+    graphY = []                     # Array to hold the Y axis data of the graph
+                                    # which is the current average reward
+    
+    
     
     
     # Setup the observation space
@@ -37,20 +58,32 @@ if __name__ == '__main__':
     player = Player(env.observation_space.shape, env.action_space.n, Lambda=Lambda, gamma=gamma, numActors=numActors, T=T, c1=c1, c2=c2, alpha=alpha)
     
     
-    # The best average reward so far
-    bestAvgReward = 0
+    # Run a presaved model
+    if loadPreSaved == True:
+        player.loadModels(modelDir=modelDir, actorFilename=actorFilename, criticFilename=criticFilename)
+        for iteration in range(1, numIters):
+            observation = env.reset()
+            player.runPolicy(env, observation, T)
     
-    # player.loadModels(modelDir=modelDir, actorFilename=actorFilename, criticFilename=criticFilename)
-    # while True:
-    #     observation = env.reset()
-    #     player.runPolicy(env, observation, T)
     
-    
-    # Iterate for numIters times
-    torch.autograd.set_detect_anomaly(True)
-    for iteration in range(1, numIters):
-        # Iterate over all actors
-        for actor in range(1, numActors):
+    # Train a model
+    else:
+        
+        # The best average reward so far
+        bestAvgReward = 0
+        
+        # The average rewards
+        avgRewards = []
+        
+        # The max count of the average rewards
+        maxCount = 25
+        
+        
+        # Iterate for numIters times
+        torch.autograd.set_detect_anomaly(True)
+        for iteration in range(1, numIters):
+            # Iterate over all actors
+            #for actor in range(1, numActors):
             # The average reward across epochs
             avgReward = 0
             
@@ -61,7 +94,8 @@ if __name__ == '__main__':
                 observation = env.reset()
                 
                 # Update the hyperparameters
-                alpha = 1-(iteration*actor)/(numIters*numActors)
+                #alpha = 1-((iteration*actor)/(numIters*numActors))
+                alpha = 1-(iteration/numIters)
                 stepSize = stepSize_start*alpha
                 epsilon = epsilon_start*alpha
                 
@@ -70,18 +104,36 @@ if __name__ == '__main__':
             
                 # Compute the gradients for the models to optimize the policy
                 avgReward += player.computeGrads(alpha=alpha, stepSize=stepSize, epsilon=epsilon)
-            
-            
-            avgReward = avgReward/numEpochs
-            print(f"Current average reward: {avgReward}")
         
             # Reset the memory and update the models
             player.resetMemory()
             player.updateModels()
             
-            # If the current average reward is better than the best average
-            # reward, save the models
-            if avgReward > bestAvgReward:
-                print("Updating Models")
+            # Calculate and store the average reward
+            avgReward = avgReward/numEpochs
+            avgRewards.append(avgReward)
+            if len(avgRewards) > maxCount:
+                avgRewards = avgRewards[1:]
+            
+            # If the current average rewards are better than the best average
+            # rewards, save the models
+            totalAvgRewards = np.average(np.array(avgRewards))
+            print(f"Current average reward: {totalAvgRewards}")
+            if totalAvgRewards > bestAvgReward:
+                print("Saving Models")
                 player.saveModels(modelDir=modelDir, actorFilename=actorFilename, criticFilename=criticFilename)
-                bestAvgReward = avgReward
+                bestAvgReward = totalAvgRewards
+            
+            # Update the graph lists
+            graphX.append(iteration)
+            graphY.append(totalAvgRewards)
+        
+        
+        # When training is over, save the graph of the model training
+        plt.plot(graphX, graphY)
+        plt.xlabel("Number of Model Updates")
+        plt.ylabel("Average Reward at Iteration")
+        plt.title("Number of Model Updates vs. Average Reward")
+        if not os.path.isdir(graphDir):
+            os.mkdir(graphDir)
+        plt.savefig(os.path.join(graphDir, graphFilename))
