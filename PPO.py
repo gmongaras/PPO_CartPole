@@ -118,6 +118,7 @@ class Critic(nn.Module):
 # Class to hold memory each iteration
 class Memory:
     def __init__(self):
+        # Normal memory
         self.states = []
         self.rewards = []
         self.actorProbs = []
@@ -126,7 +127,17 @@ class Memory:
         self.prevCriticVals = []
         self.r_ts = []
         self.dones = []
+        
+        
+        # Advantage memory
+        # The delta value at each timestep used to calculate the advantage
+        self.deltas = torch.zeros(0, dtype=torch.float, requires_grad=True)
+        
+        # The advantages for each timestep
+        self.advantages = torch.zeros(0, dtype=torch.float, requires_grad=True)
 
+
+        # The count of all memory
         self.memCount = 0
     
 
@@ -155,6 +166,9 @@ class Memory:
         self.prevCriticVals = []
         self.r_ts = []
         self.dones = []
+        
+        self.deltas = torch.zeros(0, dtype=torch.float, requires_grad=True)
+        self.advantages = torch.zeros(0, dtype=torch.float, requires_grad=True)
 
         self.memCount = 0
     
@@ -165,7 +179,78 @@ class Memory:
     # Get the data from the memory
     def getMemory(self):
         return self.states, self.rewards, self.actorProbs, self.oldActorProbs,\
-               self.currCriticVals, self.prevCriticVals, self.r_ts, self.dones
+               self.currCriticVals, self.prevCriticVals, self.r_ts, self.dones,\
+               self.deltas, self.advantages
+    
+    
+    # Using the stored memory, calculate the advantage at each timestep
+    # Inputs:
+    #    gamma - The gamma hyperparameter
+    #    Lambda - The lambda hyperparameter
+    def calculateAdvantages(self, gamma, Lambda):
+        # Get the data from the memory
+        states = self.states
+        rewards = self.rewards
+        actorProbs = self.actorProbs
+        oldActorProbs = self.oldActorProbs
+        currCriticVals = self.currCriticVals
+        prevCriticVals = self.prevCriticVals
+        r_ts = self.r_ts
+        dones = self.dones
+
+        # Iterate over all parts of memory and compute the delta values
+        for m in range(0, self.memCount-1):
+            delta = rewards[m] + gamma*currCriticVals[m+1] - (1 if dones[m] == False else 0)*currCriticVals[m]
+            self.deltas = torch.cat([self.deltas, delta])
+
+        # Iterate over all parts of memory and compute the advantages using
+        # the delta values
+        for m in range(0, self.memCount-1):
+            advantage_sums = torch.zeros(0, dtype=torch.float, requires_grad=True)
+            advantage_sums = torch.cat([advantage_sums, self.deltas[m:m+1]])
+            for i in range(m+1, self.memCount-1):
+                advantage_sums = torch.cat([advantage_sums, (gamma*Lambda)*self.deltas[i:i+1]*(1 if dones[i] == False else 0)])
+            self.advantages = torch.cat([self.advantages, torch.sum(advantage_sums, dim=-1, keepdim=True)])
+    
+    
+    
+    # Randomize the order of all memory and return that minibatch of memory
+    # Inputs:
+    #    minibatchSize - The size of each minibatch which is the size of each memory sample 
+    def sampleMemory(self, minibatchSize):
+        # Create an array containing the indicies of all items in memory
+        indices = np.array([i for i in range(0, self.memCount-1)], dtype=np.int16)
+        
+        # Randomize the memory indices
+        np.random.shuffle(indices)
+        
+        # Get the first `minibatchSize` number of indices from the list
+        # and return those memory pieces
+        returnIndices = indices[0:minibatchSize]
+        
+        # Change the needed lists to tensors for operations while retaining
+        # the gradient graph.
+        # NOTE: torch.tensor() does not retain the graph so we use torch.cat
+        # or torch.stack.
+        states = torch.tensor(self.states, requires_grad=True, device=device)
+        rewards = torch.tensor(self.rewards, dtype=torch.float, requires_grad=True, device=device)
+        actorProbs = torch.stack(self.actorProbs)
+        oldActorProbs = torch.stack(self.oldActorProbs)
+        currCriticVals = torch.cat(self.currCriticVals)
+        prevCriticVals = torch.cat(self.prevCriticVals)
+        r_ts = torch.stack(self.r_ts)
+        dones = torch.tensor(self.dones, dtype=torch.bool, requires_grad=False, device=device)
+        
+        
+        # Calculate the total reward and return it
+        totalReward = torch.sum(rewards).item()
+        
+        return states[returnIndices], rewards[returnIndices],\
+               actorProbs[returnIndices], oldActorProbs[returnIndices],\
+               currCriticVals[returnIndices], prevCriticVals[returnIndices],\
+               r_ts[returnIndices], dones[returnIndices],\
+               self.deltas[returnIndices], self.advantages[returnIndices],\
+               totalReward
 
 
 
@@ -233,13 +318,9 @@ class Player:
     #   observation - The current observed environment
     #   T - The number of timesteps to run the model
     def runPolicy(self, env, observation, T):
-        # # Calculate the first action and critic value
-        # # and update the environment
-        # actions = self.actor.forward(observation)
-        # bestAction = torch.argmax(actions).numpy()
-        # observation, reward, done, info = env.step(bestAction)
-        # prevCriticVal = self.critic.forward(actions)
-        prevCriticVal = 0
+        # Calculate the first action and critic value
+        # and update the environment
+        prevCriticVal = torch.tensor([0])
         
         # run the models T times
         for t in range(0, T):
@@ -261,8 +342,8 @@ class Player:
             # Calculate r_t, the ratio of the old policy action
             # and the current policy action
             if (self.oldActor == None):
-                oldActions = None
-                oldBestAction = None
+                oldActions = torch.zeros(actions.shape[0])
+                oldBestAction = 0
                 r_t = actions
             else:
                 oldActions = self.oldActor(state=observation)
@@ -290,11 +371,15 @@ class Player:
 
 
     # Compute the gradients for the policy based on the loss functions
+    #   minibatchSize - The size of each minibatch which is the size of each memory sample
     #   alpha - The learning rate
     #   numEpochs - The number of times to update the model
     #   stepSize - The stepping size used for the Adam optimizer
     #   epsilon - The epsilon hyperparameter for the clipped loss
-    def computeGrads(self, alpha=1, numEpochs=3, stepSize=0.00025, epsilon=0.1):
+    def computeGrads(self, minibatchSize, alpha=1, numEpochs=3, stepSize=0.00025, epsilon=0.1):
+        # Compute the advantages
+        self.memory.calculateAdvantages(self.gamma, self.Lambda)
+        
         # Convert the parameters to torch arrays
         epsilon = torch.tensor(epsilon, dtype=torch.float, requires_grad=False, device=device)
         
@@ -303,42 +388,9 @@ class Player:
         self.oldCritic = copy.deepcopy(self.critic)
         
         
-        # The delta value at each timestep used to calculate the advantage
-        deltas = torch.zeros(0, dtype=torch.float, requires_grad=True)
-        
-        # The advantages for each timestep
-        advantages = torch.zeros(0, dtype=torch.float, requires_grad=True)
-
-        # Get the data from the memory
-        states, rewards, actorProbs, oldActorProbs, currCriticVals, prevCriticVals, r_ts, dones = self.memory.getMemory()
-
-        # Iterate over all parts of memory and compute the delta values
-        for m in range(0, self.memory.getMemorySize()-1):
-            delta = rewards[m] + self.gamma*currCriticVals[m+1] - (1 if dones[m] == False else 0)*currCriticVals[m]
-            deltas = torch.cat([deltas, delta])
-
-        # Iterate over all parts of memory and compute the advantages using
-        # the delta values
-        for m in range(0, self.memory.getMemorySize()-1):
-            advantage_sums = torch.zeros(0, dtype=torch.float, requires_grad=True)
-            advantage_sums = torch.cat([advantage_sums, deltas[m:m+1]])
-            for i in range(m+1, self.memory.getMemorySize()-1):
-                advantage_sums = torch.cat([advantage_sums, (self.gamma*self.Lambda)*deltas[i:i+1]*(1 if dones[i] == False else 0)])
-            advantages = torch.cat([advantages, torch.sum(advantage_sums, dim=-1, keepdim=True)])
-        
-        
         # Update the learning rate in the optimizers
         #self.actor.optimizer.param_groups[0]["lr"] = alpha
         #self.critic.optimizer.param_groups[0]["lr"] = alpha
-        
-        
-        # Change the needed lists to tensors for operations while retaining
-        # the gradient graph.
-        # NOTE: torch.tensor() does not retain the graph so we use torch.cat
-        # or torch.stack.
-        rewards_Tensor = torch.tensor(rewards[0:advantages.shape[0]], dtype=torch.float, requires_grad=True, device=device)
-        r_ts_Tensor = torch.stack(r_ts[0:advantages.shape[0]])
-        currCriticVals_Tensor = torch.cat(currCriticVals[0:advantages.shape[0]])
         
         
         
@@ -348,15 +400,28 @@ class Player:
         # Update the model numEpochs times
         for epoch in range(0, numEpochs):
             
-            # Randomize the memory
-            #self.memory.randomize()
+            # Randomize the memory and sample it
+            states, rewards, actorProbs, oldActorProbs, currCriticVals, prevCriticVals, r_ts, dones, deltas, advantages, reward = self.memory.sampleMemory(minibatchSize=minibatchSize)
+            
+            
+            
+            # Change the needed lists to tensors for operations while retaining
+            # the gradient graph.
+            # NOTE: torch.tensor() does not retain the graph so we use torch.cat
+            # or torch.stack.
+            # rewards_Tensor = torch.tensor(rewards[0:advantages.shape[0]], dtype=torch.float, requires_grad=True, device=device)
+            # r_ts_Tensor = torch.stack(r_ts[0:advantages.shape[0]])
+            # currCriticVals_Tensor = torch.cat(currCriticVals[0:advantages.shape[0]])
+            
             
             
             # Calculate the actor loss (L_CLIP)
-            L_CLIP = -torch.min(r_ts_Tensor*advantages, torch.clip(r_ts_Tensor, 1-epsilon, 1+epsilon)*advantages).mean()
+            #L_CLIP = -torch.min(r_ts_Tensor*advantages, torch.clip(r_ts_Tensor, 1-epsilon, 1+epsilon)*advantages).mean()
+            L_CLIP = -torch.min(r_ts*advantages, torch.clip(r_ts, 1-epsilon, 1+epsilon)*advantages).mean()
             
             # Calculate the critic loss (L_VF)
-            L_VF = -torch.square(rewards_Tensor-currCriticVals_Tensor).mean()
+            #L_VF = -torch.square(rewards_Tensor-currCriticVals_Tensor).mean()
+            L_VF = -torch.square(rewards-currCriticVals).mean()
             
             # Get the entropy bonus from a normal distribution
             S = torch.tensor(np.random.normal(), dtype=torch.float, requires_grad=False)
@@ -369,7 +434,8 @@ class Player:
             L_Final.backward(retain_graph=True)
             
             # Calculate the total reward for this epoch
-            reward = torch.sum(rewards_Tensor).item()
+            #reward = torch.sum(rewards_Tensor).item()
+            #reward = torch.sum(rewards).item()
             
             # Print the information on the model
             #print("Reward:", reward, "Total Loss:", L_Final.item(), "Actor Loss:", torch.mean(L_CLIP).item(), "Critic Loss:", torch.mean(L_VF).item())

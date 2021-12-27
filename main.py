@@ -10,33 +10,36 @@ import os
 
 if __name__ == '__main__':
     env = gym.make('CartPole-v0') # Our environemnt
+    
+    # Helps with debugging PyTorch models
+    torch.autograd.set_detect_anomaly(True)
 
     # Hyperparameters
-    T = 128                      # The horizon or total time per batch
-    stepSize_start = 0.00025     # The starting Adam optimizer step size
-                                 # this will be updated as alpha updates
-    numEpochs = 3                # The total number of epochs
-    numActors = 8                # (N) The total number of different actors to use
-    batchSize = 32//numActors    # The size of each batch to run all actors
-    gamma = 0.99                 # The discount rate
-    Lambda = 0.95                # The GAE parameter
-    epsilon_start = 0.1          # The clipping paramter. This value will
-                                 # be updated as alpha updates
-    alpha = 0.0005               # Starting value of the larning rate which
-                                 # will decrease as the model updates
-    c1 = 1                       # The VF coefficient in the Loss
-    c2 = 0.01                    # The entropy coefficient in the Loss
-    numIters = 1000              # The number of times to iterate the entire program
+    T = 128                       # The horizon or total time per batch
+    stepSize_start = 0.00025      # The starting Adam optimizer step size
+                                  # this will be updated as alpha updates
+    numEpochs = 3                 # The total number of epochs
+    numActors = 8                 # (N) The total number of different actors to use
+    minibatchSize = 32//numActors # The size of each minibatch to sample batch data
+    gamma = 0.99                  # The discount rate
+    Lambda = 0.95                 # The GAE parameter
+    epsilon_start = 0.1           # The clipping paramter. This value will
+                                  # be updated as alpha updates
+    alpha = 0.0003                # Starting value of the larning rate which
+                                  # will decrease as the model updates
+    c1 = 1                        # The VF coefficient in the Loss
+    c2 = 0.01                     # The entropy coefficient in the Loss
+    numIters = 1000               # The number of times to iterate the entire program
     
     
     
     
     
     # Model saving variables
-    modelDir = ".\\models"       # The location to save the models
-    actorFilename = "actor"      # The name of the file to save the actor to
-    criticFilename = "critic"    # The name of the file to save the critic to
-    loadPreSaved = False         # True to use a pre saved model. False otherwise
+    modelDir = ".\\models"        # The location to save the models
+    actorFilename = "actor"       # The name of the file to save the actor to
+    criticFilename = "critic"     # The name of the file to save the critic to
+    loadPreSaved = False          # True to use a pre saved model. False otherwise
     
     
     
@@ -80,7 +83,6 @@ if __name__ == '__main__':
         
         
         # Iterate for numIters times
-        torch.autograd.set_detect_anomaly(True)
         for iteration in range(0, numIters):
             # Iterate over all actors
             #for actor in range(1, numActors):
@@ -106,7 +108,7 @@ if __name__ == '__main__':
             
             
             # Update the model numEpochs times
-            avgReward = player.computeGrads(alpha=alpha, numEpochs=numEpochs, stepSize=stepSize, epsilon=epsilon)
+            avgReward = player.computeGrads(minibatchSize=minibatchSize, alpha=alpha, numEpochs=numEpochs, stepSize=stepSize, epsilon=epsilon)
         
             # Reset the memory and update the models
             player.resetMemory()
