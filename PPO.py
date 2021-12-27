@@ -291,9 +291,10 @@ class Player:
 
     # Compute the gradients for the policy based on the loss functions
     #   alpha - The learning rate
+    #   numEpochs - The number of times to update the model
     #   stepSize - The stepping size used for the Adam optimizer
     #   epsilon - The epsilon hyperparameter for the clipped loss
-    def computeGrads(self, alpha=1, stepSize=0.00025, epsilon=0.1):
+    def computeGrads(self, alpha=1, numEpochs=3, stepSize=0.00025, epsilon=0.1):
         # Convert the parameters to torch arrays
         epsilon = torch.tensor(epsilon, dtype=torch.float, requires_grad=False, device=device)
         
@@ -340,30 +341,44 @@ class Player:
         currCriticVals_Tensor = torch.cat(currCriticVals[0:advantages.shape[0]])
         
         
-        # Calculate the actor loss (L_CLIP)
-        L_CLIP = -torch.min(r_ts_Tensor*advantages, torch.clip(r_ts_Tensor, 1-epsilon, 1+epsilon)*advantages).mean()
         
-        # Calculate the critic loss (L_VF)
-        L_VF = -torch.square(rewards_Tensor-currCriticVals_Tensor).mean()
+        # Holds the average reward across all epochs
+        avgReward = 0
         
-        # Get the entropy bonus from a normal distribution
-        S = torch.tensor(np.random.normal(), dtype=torch.float, requires_grad=False)
-        
-        # Calculate the final loss (L_CLIP_VF_S)
-        L_Final = L_CLIP - self.c1*L_VF + self.c2*S
-        
-        
-        # Backpropogate the total loss to get the gradients
-        L_Final.backward(retain_graph=True)
-        
-        # Calculate the total reward for this epoch
-        reward = torch.sum(rewards_Tensor).item()
-        
-        # Print the information on the model
-        #print("Reward:", reward, "Total Loss:", L_Final.item(), "Actor Loss:", torch.mean(L_CLIP).item(), "Critic Loss:", torch.mean(L_VF).item())
+        # Update the model numEpochs times
+        for epoch in range(0, numEpochs):
+            
+            # Randomize the memory
+            #self.memory.randomize()
+            
+            
+            # Calculate the actor loss (L_CLIP)
+            L_CLIP = -torch.min(r_ts_Tensor*advantages, torch.clip(r_ts_Tensor, 1-epsilon, 1+epsilon)*advantages).mean()
+            
+            # Calculate the critic loss (L_VF)
+            L_VF = -torch.square(rewards_Tensor-currCriticVals_Tensor).mean()
+            
+            # Get the entropy bonus from a normal distribution
+            S = torch.tensor(np.random.normal(), dtype=torch.float, requires_grad=False)
+            
+            # Calculate the final loss (L_CLIP_VF_S)
+            L_Final = L_CLIP - self.c1*L_VF + self.c2*S
+            
+            
+            # Backpropogate the total loss to get the gradients
+            L_Final.backward(retain_graph=True)
+            
+            # Calculate the total reward for this epoch
+            reward = torch.sum(rewards_Tensor).item()
+            
+            # Print the information on the model
+            #print("Reward:", reward, "Total Loss:", L_Final.item(), "Actor Loss:", torch.mean(L_CLIP).item(), "Critic Loss:", torch.mean(L_VF).item())
+            
+            # Add the reward to the average reward
+            avgReward += reward
 
-        # Return the reward
-        return reward
+        # Return the average reward
+        return avgReward/numEpochs
 
 
     # Update the models using the propagated gradients

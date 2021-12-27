@@ -22,11 +22,11 @@ if __name__ == '__main__':
     Lambda = 0.95                # The GAE parameter
     epsilon_start = 0.1          # The clipping paramter. This value will
                                  # be updated as alpha updates
-    alpha = 0.0003               # Starting value of the larning rate which
+    alpha = 0.0005               # Starting value of the larning rate which
                                  # will decrease as the model updates
     c1 = 1                       # The VF coefficient in the Loss
     c2 = 0.01                    # The entropy coefficient in the Loss
-    numIters = 200               # The number of times to iterate the entire program
+    numIters = 1000              # The number of times to iterate the entire program
     
     
     
@@ -81,36 +81,38 @@ if __name__ == '__main__':
         
         # Iterate for numIters times
         torch.autograd.set_detect_anomaly(True)
-        for iteration in range(1, numIters):
+        for iteration in range(0, numIters):
             # Iterate over all actors
             #for actor in range(1, numActors):
-            # The average reward across epochs
-            avgReward = 0
             
-            # Run and Update the model numEpoch times before 
-            # reseting the memory
-            for epoch in range(numEpochs):
-                # Reset the environment variables
-                observation = env.reset()
-                
-                # Update the hyperparameters
-                #alpha = 1-((iteration*actor)/(numIters*numActors))
-                alpha = 1-(iteration/numIters)
-                stepSize = stepSize_start*alpha
-                epsilon = epsilon_start*alpha
-                
-                # Run the models for T timesteps and save the results to memory
-                player.runPolicy(env, observation, T)
             
-                # Compute the gradients for the models to optimize the policy
-                avgReward += player.computeGrads(alpha=alpha, stepSize=stepSize, epsilon=epsilon)
+            
+            
+            
+            # Run the model in the environment
+            # Reset the environment variables
+            observation = env.reset()
+            
+            # Update the hyperparameters
+            #alpha = 1-((iteration*actor)/(numIters*numActors))
+            alpha = 1-(iteration/numIters)
+            stepSize = stepSize_start*alpha
+            epsilon = epsilon_start*alpha
+            
+            # Run the models for T timesteps and save the results to memory
+            player.runPolicy(env, observation, T)
+            
+            
+            
+            
+            # Update the model numEpochs times
+            avgReward = player.computeGrads(alpha=alpha, numEpochs=numEpochs, stepSize=stepSize, epsilon=epsilon)
         
             # Reset the memory and update the models
             player.resetMemory()
             player.updateModels()
             
-            # Calculate and store the average reward
-            avgReward = avgReward/numEpochs
+            # Store the average reward
             avgRewards.append(avgReward)
             if len(avgRewards) > maxCount:
                 avgRewards = avgRewards[1:]
@@ -118,11 +120,18 @@ if __name__ == '__main__':
             # If the current average rewards are better than the best average
             # rewards, save the models
             totalAvgRewards = np.average(np.array(avgRewards))
-            print(f"Current average reward: {totalAvgRewards}")
+            print(f"Step {iteration+1}. Current average reward: {totalAvgRewards}")
             if totalAvgRewards > bestAvgReward:
-                print("Saving Models")
-                player.saveModels(modelDir=modelDir, actorFilename=actorFilename, criticFilename=criticFilename)
-                bestAvgReward = totalAvgRewards
+                if len(avgRewards) > 1:
+                    if avgReward > avgRewards[-2]:
+                        print("Saving Models")
+                        player.saveModels(modelDir=modelDir, actorFilename=actorFilename, criticFilename=criticFilename)
+                        bestAvgReward = totalAvgRewards
+                
+                else:
+                    print("Saving Models")
+                    player.saveModels(modelDir=modelDir, actorFilename=actorFilename, criticFilename=criticFilename)
+                    bestAvgReward = totalAvgRewards
             
             # Update the graph lists
             graphX.append(iteration)
