@@ -1,4 +1,5 @@
 import numpy as np
+from numpy.core.arrayprint import repr_format
 import torch
 import torch.nn as nn
 import copy
@@ -30,6 +31,12 @@ class Actor(nn.Module):
         # Note: The output is in log form
         self.actor = nn.Sequential(
             nn.Linear(np.array(stateShape)[0], 256),
+            nn.ReLU(),
+            
+            nn.Linear(256, 256),
+            nn.ReLU(),
+            
+            nn.Linear(256, 256),
             nn.ReLU(),
             
             nn.Linear(256, 256),
@@ -82,6 +89,12 @@ class Critic(nn.Module):
         # Output shape: 1 representing how good a state is
         self.critic = nn.Sequential(
             nn.Linear(np.array(stateShape)[0], 256),
+            nn.ReLU(),
+            
+            nn.Linear(256, 256),
+            nn.ReLU(),
+            
+            nn.Linear(256, 256),
             nn.ReLU(),
             
             nn.Linear(256, 256),
@@ -276,8 +289,10 @@ class Player:
         self.c1 = torch.tensor(c1, dtype=torch.float, requires_grad=True, device=device)
         self.c2 = torch.tensor(c2, dtype=torch.float, requires_grad=True, device=device)
 
-        # Create a memory object
-        self.memory = Memory()
+        # Create a memory object for each actor
+        self.memory = []
+        for actor in range(0, numActors):
+            self.memory.append(Memory())
 
         # Create the actors and critic
         self.actor = Actor(stateShape=stateShape, numActions=numActions, alpha=alpha)
@@ -290,6 +305,7 @@ class Player:
     
 
     # Store memory using the given state
+    #   memNum - The memory index to store the given memory
     #   state - The state to store memory on
     #   reward - The reward received at the current state
     #   actorProbs - The probabilities the actor returned for the given state
@@ -298,26 +314,28 @@ class Player:
     #   prevCriticVal - The critic value of the previous state
     #   r_t - The ratio of the current action to the previous action
     #   done - If the player is done playing the game
-    def storeMemory(self, state, reward, actorProbs, oldActorProbs,
+    def storeMemory(self, memNum, state, reward, actorProbs, oldActorProbs,
                     currCriticVal, prevCriticVal, r_t, done):
-        # Store the information in memory
-        self.memory.addMemory(state, reward, actorProbs, oldActorProbs, currCriticVal, prevCriticVal, r_t, done)
+        # Store the information in memory in the given memory location
+        self.memory[memNum].addMemory(state, reward, actorProbs, oldActorProbs, currCriticVal, prevCriticVal, r_t, done)
         
         
         
     # Reset all memory in the model
     def resetMemory(self):
-        self.memory.clearMemory()
+        for m in self.memory:
+            m.clearMemory()
     
     
     
     
     
     # Run the policy in the environment and store the advantages
+    #   actorNum - The index of the current actor bein ran
     #   env - The environemnt to run the models in
     #   observation - The current observed environment
     #   T - The number of timesteps to run the model
-    def runPolicy(self, env, observation, T):
+    def runPolicy(self, actorNum, env, observation, T):
         # Calculate the first action and critic value
         # and update the environment
         prevCriticVal = torch.tensor([0])
@@ -357,7 +375,7 @@ class Player:
             r_t = r_t.mean()
             
             # Save the new info to memory
-            self.storeMemory(observation, reward=reward, actorProbs=actions, oldActorProbs=oldActions, currCriticVal=currCriticVal, prevCriticVal=prevCriticVal, r_t=r_t, done=done)
+            self.storeMemory(actorNum, observation, reward=reward, actorProbs=actions, oldActorProbs=oldActions, currCriticVal=currCriticVal, prevCriticVal=prevCriticVal, r_t=r_t, done=done)
             
             # Update the previous critic value to the current values
             prevCriticVal = currCriticVal
@@ -376,9 +394,11 @@ class Player:
     #   numEpochs - The number of times to update the model
     #   stepSize - The stepping size used for the Adam optimizer
     #   epsilon - The epsilon hyperparameter for the clipped loss
-    def computeGrads(self, minibatchSize, alpha=1, numEpochs=3, stepSize=0.00025, epsilon=0.1):
+    #   numActors - The number of actors that were ran for each batch
+    def computeGrads(self, minibatchSize, alpha=1, numEpochs=3, stepSize=0.00025, epsilon=0.1, numActors=8):
         # Compute the advantages
-        self.memory.calculateAdvantages(self.gamma, self.Lambda)
+        for m in self.memory:
+            m.calculateAdvantages(self.gamma, self.Lambda)
         
         # Convert the parameters to torch arrays
         epsilon = torch.tensor(epsilon, dtype=torch.float, requires_grad=False, device=device)
@@ -401,7 +421,20 @@ class Player:
         for epoch in range(0, numEpochs):
             
             # Randomize the memory and sample it
-            states, rewards, actorProbs, oldActorProbs, currCriticVals, prevCriticVals, r_ts, dones, deltas, advantages, reward = self.memory.sampleMemory(minibatchSize=minibatchSize)
+            states, rewards, actorProbs, oldActorProbs, currCriticVals, prevCriticVals, r_ts, dones, deltas, advantages, reward = self.memory[0].sampleMemory(minibatchSize=minibatchSize)
+            for m in self.memory[1:]:
+                states_sub, rewards_sub, actorProbs_sub, oldActorProbs_sub, currCriticVals_sub, prevCriticVals_sub, r_ts_sub, dones_sub, deltas_sub, advantages_sub, reward_sub = self.memory[0].sampleMemory(minibatchSize=minibatchSize)
+                states = torch.cat([states, states_sub])
+                rewards = torch.cat([rewards, rewards_sub])
+                actorProbs = torch.cat([actorProbs, actorProbs_sub])
+                oldActorProbs = torch.cat([oldActorProbs, oldActorProbs_sub])
+                currCriticVals = torch.cat([currCriticVals, currCriticVals_sub])
+                prevCriticVals = torch.cat([prevCriticVals, prevCriticVals_sub])
+                r_ts = torch.cat([r_ts, r_ts_sub])
+                dones = torch.cat([dones, dones_sub])
+                deltas = torch.cat([deltas, deltas_sub])
+                advantages = torch.cat([advantages, advantages_sub])
+                reward += reward_sub
             
             
             
@@ -444,7 +477,7 @@ class Player:
             avgReward += reward
 
         # Return the average reward
-        return avgReward/numEpochs
+        return avgReward/(numEpochs*numActors)
 
 
     # Update the models using the propagated gradients

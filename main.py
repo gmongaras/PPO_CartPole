@@ -20,16 +20,16 @@ if __name__ == '__main__':
                                   # this will be updated as alpha updates
     numEpochs = 3                 # The total number of epochs
     numActors = 8                 # (N) The total number of different actors to use
-    minibatchSize = 32//numActors # The size of each minibatch to sample batch data
+    minibatchSize = 32            # The size of each minibatch to sample batch data
     gamma = 0.99                  # The discount rate
     Lambda = 0.95                 # The GAE parameter
     epsilon_start = 0.1           # The clipping paramter. This value will
                                   # be updated as alpha updates
-    alpha = 0.0003                # Starting value of the larning rate which
+    alpha = 0.0005                # Starting value of the larning rate which
                                   # will decrease as the model updates
     c1 = 1                        # The VF coefficient in the Loss
     c2 = 0.01                     # The entropy coefficient in the Loss
-    numIters = 1000               # The number of times to iterate the entire program
+    numIters = 500                # The number of times to iterate the entire program
     
     
     
@@ -66,14 +66,14 @@ if __name__ == '__main__':
         player.loadModels(modelDir=modelDir, actorFilename=actorFilename, criticFilename=criticFilename)
         for iteration in range(1, numIters):
             observation = env.reset()
-            player.runPolicy(env, observation, T)
+            player.runPolicy(0, env, observation, T)
     
     
     # Train a model
     else:
         
         # The best average reward so far
-        bestAvgReward = 0
+        bestAvgReward = -np.inf
         
         # The average rewards
         avgRewards = []
@@ -91,24 +91,25 @@ if __name__ == '__main__':
             
             
             
-            # Run the model in the environment
-            # Reset the environment variables
-            observation = env.reset()
-            
-            # Update the hyperparameters
-            #alpha = 1-((iteration*actor)/(numIters*numActors))
-            alpha = 1-(iteration/numIters)
-            stepSize = stepSize_start*alpha
-            epsilon = epsilon_start*alpha
-            
-            # Run the models for T timesteps and save the results to memory
-            player.runPolicy(env, observation, T)
+            # Run the model in the environment numActors number of times
+            for actor in range(0, numActors):
+                # Reset the environment variables
+                observation = env.reset()
+                
+                # Update the hyperparameters
+                #alpha = 1-((iteration*actor)/(numIters*numActors))
+                alpha = 1-(iteration/numIters)
+                stepSize = stepSize_start*alpha
+                epsilon = epsilon_start*alpha
+                
+                # Run the models for T timesteps and save the results to memory
+                player.runPolicy(actor, env, observation, T)
             
             
             
             
             # Update the model numEpochs times
-            avgReward = player.computeGrads(minibatchSize=minibatchSize, alpha=alpha, numEpochs=numEpochs, stepSize=stepSize, epsilon=epsilon)
+            avgReward = player.computeGrads(minibatchSize=minibatchSize, alpha=alpha, numEpochs=numEpochs, stepSize=stepSize, epsilon=epsilon, numActors=numActors)
         
             # Reset the memory and update the models
             player.resetMemory()
