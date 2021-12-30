@@ -200,7 +200,12 @@ class Memory:
     # Inputs:
     #    gamma - The gamma hyperparameter
     #    Lambda - The lambda hyperparameter
-    def calculateAdvantages(self, gamma, Lambda):
+    #    indices - The indicies to calculate the advantages for
+    def calculateAdvantages(self, gamma, Lambda, indices):
+        # Reset the advantages
+        self.deltas = torch.zeros(0, dtype=torch.float, requires_grad=True)
+        self.advantages = torch.zeros(0, dtype=torch.float, requires_grad=True)
+        
         # Get the data from the memory
         states = self.states
         rewards = self.rewards
@@ -211,14 +216,14 @@ class Memory:
         r_ts = self.r_ts
         dones = self.dones
 
-        # Iterate over all parts of memory and compute the delta values
-        for m in range(0, self.memCount-1):
+        # Iterate over all sub parts of memory and compute the delta values
+        for m in indices:
             delta = rewards[m] + gamma*currCriticVals[m+1] - (1 if dones[m] == False else 0)*currCriticVals[m]
             self.deltas = torch.cat([self.deltas, delta])
 
-        # Iterate over all parts of memory and compute the advantages using
+        # Iterate over all sub parts of memory and compute the advantages using
         # the delta values
-        for m in range(0, self.memCount-1):
+        for m in indices:
             advantage_sums = torch.zeros(0, dtype=torch.float, requires_grad=True)
             advantage_sums = torch.cat([advantage_sums, self.deltas[m:m+1]])
             for i in range(m+1, self.memCount-1):
@@ -230,7 +235,9 @@ class Memory:
     # Randomize the order of all memory and return that minibatch of memory
     # Inputs:
     #    minibatchSize - The size of each minibatch which is the size of each memory sample 
-    def sampleMemory(self, minibatchSize):
+    #    gamma - The gamma hyperparameter
+    #    Lambda - The lambda hyperparameter
+    def sampleMemory(self, minibatchSize, gamma, Lambda):
         # Create an array containing the indicies of all items in memory
         indices = np.array([i for i in range(0, self.memCount-1)], dtype=np.int16)
         
@@ -258,11 +265,15 @@ class Memory:
         # Calculate the total reward and return it
         totalReward = torch.sum(rewards).item()
         
+        # Compute the advantages using the subset data
+        self.calculateAdvantages(gamma, Lambda, returnIndices)
+        
+        # Return the subarrays
         return states[returnIndices], rewards[returnIndices],\
                actorProbs[returnIndices], oldActorProbs[returnIndices],\
                currCriticVals[returnIndices], prevCriticVals[returnIndices],\
                r_ts[returnIndices], dones[returnIndices],\
-               self.deltas[returnIndices], self.advantages[returnIndices],\
+               self.deltas, self.advantages,\
                totalReward
 
 
@@ -335,7 +346,8 @@ class Player:
     #   env - The environemnt to run the models in
     #   observation - The current observed environment
     #   T - The number of timesteps to run the model
-    def runPolicy(self, actorNum, env, observation, T):
+    #   showTraining - If the environemnt should be shown during training
+    def runPolicy(self, actorNum, env, observation, T, showTraining):
         # Calculate the first action and critic value
         # and update the environment
         prevCriticVal = torch.tensor([0])
@@ -343,7 +355,8 @@ class Player:
         # run the models T times
         for t in range(0, T):
             # Render the environment
-            env.render()
+            if showTraining == True:
+                env.render()
             
             # Get an action sample from the actor distribution
             # Note: The actions are in log form
@@ -396,10 +409,6 @@ class Player:
     #   epsilon - The epsilon hyperparameter for the clipped loss
     #   numActors - The number of actors that were ran for each batch
     def computeGrads(self, minibatchSize, alpha=1, numEpochs=3, stepSize=0.00025, epsilon=0.1, numActors=8):
-        # Compute the advantages
-        for m in self.memory:
-            m.calculateAdvantages(self.gamma, self.Lambda)
-        
         # Convert the parameters to torch arrays
         epsilon = torch.tensor(epsilon, dtype=torch.float, requires_grad=False, device=device)
         
@@ -421,9 +430,9 @@ class Player:
         for epoch in range(0, numEpochs):
             
             # Randomize the memory and sample it
-            states, rewards, actorProbs, oldActorProbs, currCriticVals, prevCriticVals, r_ts, dones, deltas, advantages, reward = self.memory[0].sampleMemory(minibatchSize=minibatchSize)
+            states, rewards, actorProbs, oldActorProbs, currCriticVals, prevCriticVals, r_ts, dones, deltas, advantages, reward = self.memory[0].sampleMemory(minibatchSize=minibatchSize, gamma=self.gamma, Lambda=self.Lambda)
             for m in self.memory[1:]:
-                states_sub, rewards_sub, actorProbs_sub, oldActorProbs_sub, currCriticVals_sub, prevCriticVals_sub, r_ts_sub, dones_sub, deltas_sub, advantages_sub, reward_sub = self.memory[0].sampleMemory(minibatchSize=minibatchSize)
+                states_sub, rewards_sub, actorProbs_sub, oldActorProbs_sub, currCriticVals_sub, prevCriticVals_sub, r_ts_sub, dones_sub, deltas_sub, advantages_sub, reward_sub = m.sampleMemory(minibatchSize=minibatchSize, gamma=self.gamma, Lambda=self.Lambda)
                 states = torch.cat([states, states_sub])
                 rewards = torch.cat([rewards, rewards_sub])
                 actorProbs = torch.cat([actorProbs, actorProbs_sub])
@@ -435,6 +444,8 @@ class Player:
                 deltas = torch.cat([deltas, deltas_sub])
                 advantages = torch.cat([advantages, advantages_sub])
                 reward += reward_sub
+                if r_ts_sub.shape[0] != advantages_sub.shape[0]:
+                    print()
             
             
             

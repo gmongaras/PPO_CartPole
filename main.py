@@ -25,7 +25,7 @@ if __name__ == '__main__':
     Lambda = 0.95                 # The GAE parameter
     epsilon_start = 0.1           # The clipping paramter. This value will
                                   # be updated as alpha updates
-    alpha = 0.0005                # Starting value of the larning rate which
+    alpha = 0.0001                # Starting value of the larning rate which
                                   # will decrease as the model updates
     c1 = 1                        # The VF coefficient in the Loss
     c2 = 0.01                     # The entropy coefficient in the Loss
@@ -50,6 +50,12 @@ if __name__ == '__main__':
                                     # which is number of iterations
     graphY = []                     # Array to hold the Y axis data of the graph
                                     # which is the current average reward
+                                    
+                                    
+                                    
+    # Other variables
+    showTraining = True             # True if the environment should be shown during
+                                    # training. False otherwise.
     
     
     
@@ -66,7 +72,7 @@ if __name__ == '__main__':
         player.loadModels(modelDir=modelDir, actorFilename=actorFilename, criticFilename=criticFilename)
         for iteration in range(1, numIters):
             observation = env.reset()
-            player.runPolicy(0, env, observation, T)
+            player.runPolicy(0, env, observation, T, showTraining)
     
     
     # Train a model
@@ -103,7 +109,7 @@ if __name__ == '__main__':
                 epsilon = epsilon_start*alpha
                 
                 # Run the models for T timesteps and save the results to memory
-                player.runPolicy(actor, env, observation, T)
+                player.runPolicy(actor, env, observation, T, showTraining)
             
             
             
