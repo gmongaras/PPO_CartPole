@@ -15,21 +15,21 @@ if __name__ == '__main__':
     torch.autograd.set_detect_anomaly(True)
 
     # Hyperparameters
-    T = 128                       # The horizon or total time per batch
+    T = 500                       # The horizon or total time per batch
     stepSize_start = 0.00025      # The starting Adam optimizer step size
                                   # this will be updated as alpha updates
     numEpochs = 3                 # The total number of epochs
-    numActors = 20                # (N) The total number of different actors to use
+    numActors = 8                 # (N) The total number of different actors to use
     minibatchSize = 32            # The size of each minibatch to sample batch data
     gamma = 0.99                  # The discount rate
     Lambda = 0.95                 # The GAE parameter
     epsilon_start = 0.1           # The clipping paramter. This value will
                                   # be updated as alpha updates
-    alpha = 0.0007                # Starting value of the larning rate which
+    alpha = 0.00005                 # Starting value of the learning rate which
                                   # will decrease as the model updates
     c1 = 1                        # The VF coefficient in the Loss
     c2 = 0.01                     # The entropy coefficient in the Loss
-    numIters = 500                # The number of times to iterate the entire program
+    numIters = 400                # The number of times to iterate the entire program
     
     
     
@@ -54,14 +54,13 @@ if __name__ == '__main__':
                                     
                                     
     # Other variables
-    showTraining = True             # True if the environment should be shown during
+    showTraining = True            # True if the environment should be shown during
                                     # training. False otherwise.
+    updateParameters = False        # True if the alpha, epsilon, and the stepSize should
+                                    # update as the iterations increases. False otherwise
     
     
     
-    
-    # Setup the observation space
-    #observation_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32)
     
     # Create a player
     player = Player(env.observation_space.shape, env.action_space.n, Lambda=Lambda, gamma=gamma, numActors=numActors, T=T, c1=c1, c2=c2, alpha=alpha)
@@ -98,23 +97,26 @@ if __name__ == '__main__':
                 # Reset the environment variables
                 observation = env.reset()
                 
-                # Update the hyperparameters
-                alpha = 1-((iteration*actor)/(numIters*numActors))
-                stepSize = stepSize_start#*alpha
-                epsilon = epsilon_start#*alpha
-                
                 # Run the models for T timesteps and save the results to memory
                 player.runPolicy(actor, env, observation, T, showTraining)
             
             
+            # Update the hyperparameters if specified
+            if updateParameters == True:
+                alpha = 1-(iteration/numIters)
+                stepSize = stepSize_start*alpha
+                epsilon = epsilon_start*alpha
+            else:
+                stepSize = stepSize_start
+                epsilon = epsilon_start
             
             
             # Update the model numEpochs times
             avgReward = player.computeGrads(minibatchSize=minibatchSize, alpha=alpha, numEpochs=numEpochs, stepSize=stepSize, epsilon=epsilon, numActors=numActors)
         
             # Reset the memory and update the models
-            player.resetMemory()
             player.updateModels()
+            player.resetMemory()
             
             # Store the average reward
             avgRewards.append(avgReward)
@@ -124,7 +126,7 @@ if __name__ == '__main__':
             # If the current average rewards are better than the best average
             # rewards, save the models
             totalAvgRewards = np.average(np.array(avgRewards))
-            print(f"Step {iteration+1}. Current average reward: {totalAvgRewards}. Current reward: {avgReward}")
+            print(f"Step {iteration+1}.\t  Current average reward: {totalAvgRewards:.2f}.\t  Current reward: {avgReward}")
             if totalAvgRewards > bestAvgReward:
                 if len(avgRewards) > 1:
                     if avgReward > avgRewards[-2]:
@@ -144,7 +146,7 @@ if __name__ == '__main__':
         # When training is over, save the graph of the model training
         plt.plot(graphX, graphY)
         plt.xlabel("Number of Model Updates")
-        plt.ylabel("Average Reward at Iteration")
+        plt.ylabel("Average Reward")
         plt.title("Number of Model Updates vs. Average Reward")
         if not os.path.isdir(graphDir):
             os.mkdir(graphDir)

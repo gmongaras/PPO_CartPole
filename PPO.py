@@ -203,16 +203,18 @@ class Memory:
         r_ts = self.r_ts
         dones = self.dones
 
-        # Iterate over all sub parts of memory and compute the delta values
+        # Iterate over all parts of memory and compute the delta values
         for m in range(0, self.memCount-1):
-            delta = rewards[m] + gamma*currCriticVals[m+1] - (1 if dones[m] == False else 0)*currCriticVals[m]
+            delta = rewards[m] + (1 if dones[m] == False else 0)*gamma*currCriticVals[m+1] - currCriticVals[m]
             self.deltas = torch.cat([self.deltas, delta])
 
-        # Iterate over all sub parts of memory and compute the advantages using
+        # Iterate over all parts of memory and compute the advantages using
         # the delta values
         for m in range(0, self.memCount-1):
-            advantage_sums = self.deltas[m] + (gamma*Lambda)*self.deltas[m+1:]
-            self.advantages = torch.cat([self.advantages, torch.sum(advantage_sums, dim=-1, keepdim=True)])
+            advantage = 0
+            for m2 in range(m, self.memCount-1):
+                advantage += ((gamma*Lambda)**(m2-m))*self.deltas[m2]
+            self.advantages = torch.cat([self.advantages, advantage.view(1)])
         
     
     
