@@ -31,10 +31,10 @@ class Actor(nn.Module):
         # Note: The output is in log form
         self.actor = nn.Sequential(
             nn.Linear(np.array(stateShape)[0], 256),
-            nn.LeakyReLU(),
+            nn.ReLU(),
             
             nn.Linear(256, 256),
-            nn.LeakyReLU(),
+            nn.ReLU(),
 
             nn.Linear(256, numActions),
             nn.LogSoftmax(dim=-1)
@@ -83,10 +83,10 @@ class Critic(nn.Module):
         # Output shape: 1 representing how good a state is
         self.critic = nn.Sequential(
             nn.Linear(np.array(stateShape)[0], 256),
-            nn.LeakyReLU(),
+            nn.ReLU(),
             
             nn.Linear(256, 256),
-            nn.LeakyReLU(),
+            nn.ReLU(),
 
             nn.Linear(256, 1)
         ).to(device)
@@ -258,6 +258,11 @@ class Memory:
                r_ts[returnIndices], dones[returnIndices],\
                self.deltas[returnIndices], self.advantages[returnIndices],\
                totalReward
+    
+    
+    # Calculate and return the total reward
+    def getTotalReward(self):
+        return np.sum(np.array(self.rewards))
 
 
 
@@ -410,9 +415,6 @@ class Player:
         
         
         
-        # Holds the average reward across all epochs
-        avgReward = 0
-        
         # Update the model numEpochs times
         for epoch in range(0, numEpochs):
             
@@ -437,12 +439,6 @@ class Player:
                 
                 # Backpropogate the total loss to get the gradients
                 L_Final.backward(retain_graph=True)
-                
-                # Add the reward to the average reward
-                avgReward += reward
-
-        # Return the average reward
-        return avgReward/(numEpochs*numActors)
 
 
     # Update the models using the propagated gradients
@@ -467,3 +463,10 @@ class Player:
     def loadModels(self, modelDir, actorFilename, criticFilename):
         self.actor.loadModel(os.path.join(modelDir, actorFilename))
         self.critic.loadModel(os.path.join(modelDir, criticFilename))
+    
+    # Get the average reward from memory
+    def getAvgReward(self):
+        reward = 0
+        for m in self.memory:
+            reward += m.getTotalReward()
+        return reward/self.numActors

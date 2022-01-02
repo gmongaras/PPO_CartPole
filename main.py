@@ -18,28 +18,33 @@ if __name__ == '__main__':
     T = 500                       # The horizon or total time per batch
     stepSize_start = 0.00025      # The starting Adam optimizer step size
                                   # this will be updated as alpha updates
-    numEpochs = 3                 # The total number of epochs
-    numActors = 8                 # (N) The total number of different actors to use
-    minibatchSize = 32            # The size of each minibatch to sample batch data
+    numEpochs = 4                 # The total number of epochs
+    numActors = 20                # (N) The total number of different actors to use
+    minibatchSize = 5             # The size of each minibatch to sample batch data
     gamma = 0.99                  # The discount rate
     Lambda = 0.95                 # The GAE parameter
-    epsilon_start = 0.1           # The clipping paramter. This value will
+    epsilon_start = 0.2           # The clipping paramter. This value will
                                   # be updated as alpha updates
-    alpha = 0.00005                 # Starting value of the learning rate which
+    alpha = 0.000125              # Starting value of the learning rate which
                                   # will decrease as the model updates
     c1 = 1                        # The VF coefficient in the Loss
     c2 = 0.01                     # The entropy coefficient in the Loss
-    numIters = 400                # The number of times to iterate the entire program
+    numIters = 100                # The number of times to iterate the entire program
     
     
     
     
     
     # Model saving variables
-    modelDir = ".\\models"        # The location to save the models
-    actorFilename = "actor"       # The name of the file to save the actor to
-    criticFilename = "critic"     # The name of the file to save the critic to
-    loadPreSaved = False          # True to use a pre saved model. False otherwise
+    modelDir = ".\\models"          # The location to save the models
+    actorFilename = "actor"         # The name of the file to save the actor to
+    criticFilename = "critic"       # The name of the file to save the critic to
+    loadPreSaved = False            # True to use a pre saved model. False otherwise
+    actorFilenameMax = "actor-200"  # The name of the file to save the actor if it reaches
+                                    # The set max reward
+    criticFilenameMax = "critic-200"# The name of the file to save the critic if it reaches
+                                    # The set max reward
+    maxReward = 200                 # The max possible reward in this environment
     
     
     
@@ -74,9 +79,8 @@ if __name__ == '__main__':
             player.runPolicy(0, env, observation, T, showTraining)
     
     
-    # Train a model
+    # Train the models
     else:
-        
         # The best average reward so far
         bestAvgReward = -np.inf
         
@@ -84,7 +88,7 @@ if __name__ == '__main__':
         avgRewards = []
         
         # The max count of the average rewards
-        maxCount = 25
+        maxCount = 10
         
         
         # Iterate for numIters times
@@ -110,13 +114,8 @@ if __name__ == '__main__':
                 stepSize = stepSize_start
                 epsilon = epsilon_start
             
-            
-            # Update the model numEpochs times
-            avgReward = player.computeGrads(minibatchSize=minibatchSize, alpha=alpha, numEpochs=numEpochs, stepSize=stepSize, epsilon=epsilon, numActors=numActors)
-        
-            # Reset the memory and update the models
-            player.updateModels()
-            player.resetMemory()
+            # Get the average reward from memory
+            avgReward = player.getAvgReward()
             
             # Store the average reward
             avgRewards.append(avgReward)
@@ -138,9 +137,28 @@ if __name__ == '__main__':
                     player.saveModels(modelDir=modelDir, actorFilename=actorFilename, criticFilename=criticFilename)
                 bestAvgReward = totalAvgRewards
             
+            # If the current average rewards equal the max value,
+            # save the models
+            if avgReward >= maxReward:
+                print("Saving Models Due To Max Reward")
+                player.saveModels(modelDir=modelDir, actorFilename=actorFilenameMax, criticFilename=criticFilenameMax)
+            
             # Update the graph lists
             graphX.append(iteration)
             graphY.append(totalAvgRewards)
+            
+            
+            
+            
+            
+            # Update the model numEpochs times
+            player.computeGrads(minibatchSize=minibatchSize, alpha=alpha, numEpochs=numEpochs, stepSize=stepSize, epsilon=epsilon, numActors=numActors)
+        
+            # Reset the memory and update the models
+            player.updateModels()
+            player.resetMemory()
+        
+        
         
         
         # When training is over, save the graph of the model training
