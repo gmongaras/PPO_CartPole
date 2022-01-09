@@ -25,7 +25,7 @@ if __name__ == '__main__':
     Lambda = 0.95                 # The GAE parameter
     epsilon_start = 0.2           # The clipping paramter. This value will
                                   # be updated as alpha updates
-    alpha = 0.000125              # Starting value of the learning rate which
+    alpha = 0.0001                # Starting value of the learning rate which
                                   # will decrease as the model updates
     c1 = 1                        # The VF coefficient in the Loss
     c2 = 0.01                     # The entropy coefficient in the Loss

@@ -48,8 +48,7 @@ class Actor(nn.Module):
     # Feed forward
     def forward(self, state):
         if type(state) is np.ndarray:
-            state = torch.from_numpy(state)
-            #state.requires_grad = True
+            state = torch.from_numpy(state).to(device=device)
         
         # Get the forward feed value from the network and return it
         return self.actor(state)
@@ -99,7 +98,7 @@ class Critic(nn.Module):
     # Feed forward
     def forward(self, state):
         if type(state) is np.ndarray:
-            state = torch.from_numpy(state)
+            state = torch.from_numpy(state).to(device=device)
         
         # Return the critic value of the state
         return self.critic(state)
@@ -205,7 +204,7 @@ class Memory:
 
         # Iterate over all parts of memory and compute the delta values
         for m in range(0, self.memCount-1):
-            delta = rewards[m] + (1 if dones[m] == False else 0)*gamma*currCriticVals[m+1] - currCriticVals[m]
+            delta = rewards[m] + gamma*currCriticVals[m+1] - currCriticVals[m]
             self.deltas = torch.cat([self.deltas, delta])
 
         # Iterate over all parts of memory and compute the advantages using
@@ -213,7 +212,7 @@ class Memory:
         for m in range(0, self.memCount-1):
             advantage = 0
             for m2 in range(m, self.memCount-1):
-                advantage += ((gamma*Lambda)**(m2-m))*self.deltas[m2]
+                advantage += ((gamma*Lambda)**(m2-m))*self.deltas[m2]*(1 if dones[m] == False else 0)
             self.advantages = torch.cat([self.advantages, advantage.view(1)])
         
     
@@ -425,10 +424,10 @@ class Player:
                 states, rewards, actorProbs, oldActorProbs, currCriticVals, prevCriticVals, r_ts, dones, deltas, advantages, reward = m.sampleMemory(minibatchSize=minibatchSize, gamma=self.gamma, Lambda=self.Lambda)
                 
                 # Calculate the actor loss (L_CLIP)
-                L_CLIP = -torch.min(r_ts*advantages, torch.clip(r_ts, 1-epsilon, 1+epsilon)*advantages).mean()
+                L_CLIP = -(torch.min(r_ts*advantages, torch.clip(r_ts, 1-epsilon, 1+epsilon)*advantages).mean())
                 
                 # Calculate the critic loss (L_VF)
-                L_VF = -torch.square(rewards-currCriticVals).mean()
+                L_VF = -(torch.square(rewards-currCriticVals).mean())
                 
                 # Get the entropy bonus from a normal distribution
                 S = torch.tensor(np.random.normal(), dtype=torch.float, requires_grad=False)
