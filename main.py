@@ -15,21 +15,22 @@ if __name__ == '__main__':
     torch.autograd.set_detect_anomaly(True)
 
     # Hyperparameters
-    T = 500                       # The horizon or total time per batch
+    T = 200                       # The horizon or total time per batch
     stepSize_start = 0.00025      # The starting Adam optimizer step size
                                   # this will be updated as alpha updates
-    numEpochs = 4                 # The total number of epochs
-    numActors = 20                # (N) The total number of different actors to use
+    numEpochs = 3                 # The total number of epochs
+    numActors = 5                 # (N) The total number of different actors to use
     minibatchSize = 5             # The size of each minibatch to sample batch data
+    numActions = 20               # Number of actions before an update
     gamma = 0.99                  # The discount rate
     Lambda = 0.95                 # The GAE parameter
     epsilon_start = 0.2           # The clipping paramter. This value will
                                   # be updated as alpha updates
     alpha = 0.0001                # Starting value of the learning rate which
                                   # will decrease as the model updates
-    c1 = 1                        # The VF coefficient in the Loss
+    c1 = 0.6                      # The VF coefficient in the Loss
     c2 = 0.01                     # The entropy coefficient in the Loss
-    numIters = 100                # The number of times to iterate the entire program
+    numIters = 200                # The number of times to iterate the entire program
     
     
     
@@ -63,6 +64,7 @@ if __name__ == '__main__':
                                     # training. False otherwise.
     updateParameters = False        # True if the alpha, epsilon, and the stepSize should
                                     # update as the iterations increases. False otherwise
+    maxCount = 3                    # The max count of the average rewards
     
     
     
@@ -76,7 +78,7 @@ if __name__ == '__main__':
         player.loadModels(modelDir=modelDir, actorFilename=actorFilename, criticFilename=criticFilename)
         for iteration in range(1, numIters):
             observation = env.reset()
-            player.runPolicy(0, env, observation, T, showTraining)
+            player.runPolicy(0, env, observation, T, showTraining, numActions, minibatchSize)
     
     
     # Train the models
@@ -87,22 +89,9 @@ if __name__ == '__main__':
         # The average rewards
         avgRewards = []
         
-        # The max count of the average rewards
-        maxCount = 10
-        
         
         # Iterate for numIters times
         for iteration in range(0, numIters):
-            
-            
-            
-            # Run the model in the environment numActors number of times
-            for actor in range(0, numActors):
-                # Reset the environment variables
-                observation = env.reset()
-                
-                # Run the models for T timesteps and save the results to memory
-                player.runPolicy(actor, env, observation, T, showTraining)
             
             
             # Update the hyperparameters if specified
@@ -114,8 +103,28 @@ if __name__ == '__main__':
                 stepSize = stepSize_start
                 epsilon = epsilon_start
             
-            # Get the average reward from memory
-            avgReward = player.getAvgReward()
+            
+            
+            # Run the model in the environment numActors number of times
+            avgReward = 0
+            for actor in range(0, numActors):
+                # Reset the environment variables
+                observation = env.reset()
+                
+                # Run the models for T timesteps and save the results to memory
+                avgReward += player.runPolicy(actor, env, observation, T, showTraining, numActions, minibatchSize, alpha, numEpochs, stepSize, epsilon)
+                
+                # Update the model when it's done performing
+                player.computeGrads(actor, minibatchSize=minibatchSize, alpha=alpha, numEpochs=numEpochs, stepSize=stepSize, epsilon=epsilon)
+            
+            
+            # Divide the average reward by the number of actors
+            avgReward /= numActors
+        
+            
+            
+            
+            
             
             # Store the average reward
             avgRewards.append(avgReward)
@@ -146,17 +155,6 @@ if __name__ == '__main__':
             # Update the graph lists
             graphX.append(iteration)
             graphY.append(totalAvgRewards)
-            
-            
-            
-            
-            
-            # Update the model numEpochs times
-            player.computeGrads(minibatchSize=minibatchSize, alpha=alpha, numEpochs=numEpochs, stepSize=stepSize, epsilon=epsilon, numActors=numActors)
-        
-            # Reset the memory and update the models
-            player.updateModels()
-            player.resetMemory()
         
         
         

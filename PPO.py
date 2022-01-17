@@ -188,6 +188,10 @@ class Memory:
     #    gamma - The gamma hyperparameter
     #    Lambda - The lambda hyperparameter
     def calculateAdvantages(self, gamma, Lambda):
+        # if the memory is empty, there is nothing to compute
+        if self.isEmpty() == True:
+            return
+        
         # Reset the advantages
         self.deltas = torch.zeros(0, dtype=torch.float, requires_grad=True, device=device)
         self.advantages = torch.zeros(0, dtype=torch.float, requires_grad=True, device=device)
@@ -262,6 +266,13 @@ class Memory:
     # Calculate and return the total reward
     def getTotalReward(self):
         return np.sum(np.array(self.rewards))
+    
+    
+    # Returns True if the memory is empty, False otherwise
+    def isEmpty(self):
+        return len(self.states)<=1
+    
+    
 
 
 
@@ -323,6 +334,8 @@ class Player:
     def resetMemory(self):
         for m in self.memory:
             m.clearMemory()
+            
+            
     
     
     
@@ -334,13 +347,22 @@ class Player:
     #   observation - The current observed environment
     #   T - The number of timesteps to run the model
     #   showTraining - If the environemnt should be shown during training
-    def runPolicy(self, actorNum, env, observation, T, showTraining):
+    #   numActions - The number of actions before an update
+    #   minibatchSize - The size of each minibatch to train the network on
+    #   alpha - The learning rate
+    #   numEpochs - The number of times to update the model
+    #   stepSize - The stepping size used for the Adam optimizer
+    #   epsilon - The epsilon hyperparameter for the clipped loss
+    def runPolicy(self, actorNum, env, observation, T, showTraining, numActions, minibatchSize, alpha, numEpochs, stepSize, epsilon):
         # Calculate the first action and critic value
         # and update the environment
         prevCriticVal = torch.tensor([0], device=device)
         
+        # Hold the rewards so we know what the total reward is
+        rewards = 0
+        
         # run the models T times
-        for t in range(0, T):
+        for t in range(1, T):
             # Render the environment
             if showTraining == True:
                 env.render()
@@ -380,9 +402,17 @@ class Player:
             # Update the previous critic value to the current values
             prevCriticVal = currCriticVal
             
+            if t % numActions == 0:
+                rewards += self.getAvgReward(actorNum)
+                self.computeGrads(actorNum, minibatchSize, alpha, numEpochs, stepSize, epsilon)
+            
             # If done is true, stop the iteration
             if done == True:
                 break
+                
+        # Return the average reward
+        rewards += self.getAvgReward(actorNum)
+        return rewards
     
     
 
@@ -394,18 +424,12 @@ class Player:
     #   numEpochs - The number of times to update the model
     #   stepSize - The stepping size used for the Adam optimizer
     #   epsilon - The epsilon hyperparameter for the clipped loss
-    #   numActors - The number of actors that were ran for each batch
-    def computeGrads(self, minibatchSize, alpha=1, numEpochs=3, stepSize=0.00025, epsilon=0.1, numActors=8):        
+    def computeGrads(self, actor, minibatchSize, alpha=1, numEpochs=3, stepSize=0.00025, epsilon=0.1):        
         # Compute the advantages for all memory
-        for m in self.memory:
-            m.calculateAdvantages(self.gamma, self.Lambda)
+        self.memory[actor].calculateAdvantages(self.gamma, self.Lambda)
         
         # Convert the parameters to torch arrays
         epsilon = torch.tensor(epsilon, dtype=torch.float, requires_grad=False, device=device)
-        
-        # Before updating, store the old models
-        self.oldActor = copy.deepcopy(self.actor)
-        self.oldCritic = copy.deepcopy(self.critic)
         
         
         # Update the learning rate in the optimizers
@@ -418,37 +442,52 @@ class Player:
         for epoch in range(0, numEpochs):
             
             
-            # Randomize the memory and sample it. Then update
-            # the models for each part of memory (each batch)
-            for m in self.memory:
-                states, rewards, actorProbs, oldActorProbs, currCriticVals, prevCriticVals, r_ts, dones, deltas, advantages, reward = m.sampleMemory(minibatchSize=minibatchSize, gamma=self.gamma, Lambda=self.Lambda)
-                
-                # Calculate the actor loss (L_CLIP)
-                L_CLIP = -(torch.min(r_ts*advantages, torch.clip(r_ts, 1-epsilon, 1+epsilon)*advantages).mean())
-                
-                # Calculate the critic loss (L_VF)
-                L_VF = -(torch.square(rewards-currCriticVals).mean())
-                
-                # Get the entropy bonus from a normal distribution
-                S = torch.tensor(np.random.normal(), dtype=torch.float, requires_grad=False)
-                
-                # Calculate the final loss (L_CLIP_VF_S)
-                L_Final = L_CLIP - self.c1*L_VF + self.c2*S
-                
-                
-                # Backpropogate the total loss to get the gradients
-                L_Final.backward(retain_graph=True)
+            
+            m = self.memory[actor]
+            # If the memory is empty, skip it
+            if m.isEmpty():
+                continue
+            
+            # Randomize the memory and sample it.
+            states, rewards, actorProbs, oldActorProbs, currCriticVals, prevCriticVals, r_ts, dones, deltas, advantages, reward = m.sampleMemory(minibatchSize=minibatchSize, gamma=self.gamma, Lambda=self.Lambda)
+            
+            newActorProbs = self.actor(states)
+            newCriticVal = self.critic(states)
+            new_rts = torch.mean(torch.exp(newActorProbs - actorProbs.detach()), dim=-1)
+            
+            
+            # Calculate the actor loss (L_CLIP)
+            L_CLIP = -(torch.min(new_rts*advantages.detach(), torch.clip(new_rts, 1-epsilon, 1+epsilon)*advantages.detach()).mean())
+            
+            # Calculate the critic loss (L_VF)
+            #L_VF = -(torch.square(rewards-currCriticVals).mean())
+            #L_VF = -(torch.square(rewards-newCriticVal).mean())
+            L_VF = -(torch.square((advantages.detach()+currCriticVals.detach())-newCriticVal).mean())
+            
+            # Get the entropy bonus from a normal distribution
+            S = torch.tensor(np.random.normal(), dtype=torch.float, requires_grad=False)
+            
+            # Calculate the final loss (L_CLIP_VF_S)
+            L_Final = L_CLIP - self.c1*L_VF + self.c2*S
+            
+            
+            # Backpropogate the total loss to get the gradients
+            L_Final.backward(retain_graph=False)
+            
+            # Step the optimizers and update the models
+            self.actor.optimizer.step()
+            self.critic.optimizer.step()
+            
+            # Zero the gradients
+            self.actor.optimizer.zero_grad()
+            self.critic.optimizer.zero_grad()
+            
+            self.oldActor = copy.deepcopy(self.actor)
+            self.oldCritic = copy.deepcopy(self.critic)
 
-
-    # Update the models using the propagated gradients
-    def updateModels(self):
-        # Step the optimizers and update the models
-        self.actor.optimizer.step()
-        self.critic.optimizer.step()
         
-        # Zero the gradients
-        self.actor.optimizer.zero_grad()
-        self.critic.optimizer.zero_grad()
+        # Reset the memory
+        self.resetMemory()
         
         
     # Save the models to specified filenames
@@ -464,8 +503,5 @@ class Player:
         self.critic.loadModel(os.path.join(modelDir, criticFilename))
     
     # Get the average reward from memory
-    def getAvgReward(self):
-        reward = 0
-        for m in self.memory:
-            reward += m.getTotalReward()
-        return reward/self.numActors
+    def getAvgReward(self, actorNum):
+        return self.memory[actorNum].getTotalReward()
