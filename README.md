@@ -11,4 +11,4 @@ To run this program, run the main.py file in a python environment. Make sure to 
 
 
 # Gif of The Process
-![Training Gif](training.gif)
+![Training Gif](gifs/training.gif)
